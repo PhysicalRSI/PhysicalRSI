@@ -26,6 +26,9 @@ class HarnessState:
         self.root = Path(root).resolve()
 
     def _record(self, revision):
+        if (not isinstance(revision, str) or len(revision) != 64
+                or any(c not in "0123456789abcdef" for c in revision)):
+            raise ValueError("Expected a content-addressed lineage revision")
         value = read_json(self.root / "history" / (revision + ".json"))
         if digest(value) != revision:
             raise ValueError("Lineage record changed")
@@ -38,6 +41,10 @@ class HarnessState:
 
     def resolve(self):
         revision = read_json(self.root / "current.json")["revision"]
+        return self.read(revision)
+
+    def read(self, revision):
+        """Inspect a historical revision and verify its complete evidence."""
         record = self._record(revision)
         return dict(revision=revision, **record)
 

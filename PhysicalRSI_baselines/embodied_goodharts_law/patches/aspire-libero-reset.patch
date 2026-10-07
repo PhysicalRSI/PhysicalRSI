@@ -1,0 +1,30 @@
+diff --git a/aspire/sim/cap/envs/simulators/libero.py b/aspire/sim/cap/envs/simulators/libero.py
+index e498a92..6329af4 100644
+--- a/aspire/sim/cap/envs/simulators/libero.py
++++ b/aspire/sim/cap/envs/simulators/libero.py
+@@ -167,9 +167,9 @@ class FrankaLiberoEnv(BaseEnv):
+             if seed is not None:
+                 # Assuming seed is the trial number (1-based)
+                 state_idx = (seed - 1) % len(self.handle.init_states)
+-                self.handle.env.set_init_state(self.handle.init_states[state_idx])
+-                # Reset simulation again to apply the new init state
+-                libero_obs = self.handle.env.reset()
++                # set_init_state already applies physics state and regenerates observations.
++                # A subsequent reset would discard the selected benchmark layout.
++                libero_obs = self.handle.env.set_init_state(self.handle.init_states[state_idx])
+                 libero_info = {}
+ 
+         self._current_obs = libero_obs
+diff --git a/aspire/sim/cap/integrations/libero/__init__.py b/aspire/sim/cap/integrations/libero/__init__.py
+index 845f280..1750935 100644
+--- a/aspire/sim/cap/integrations/libero/__init__.py
++++ b/aspire/sim/cap/integrations/libero/__init__.py
+@@ -26,7 +26,7 @@ class LiberoHandle:
+         self.env.seed(seed)
+         obs = self.env.reset()
+         if self.init_states is not None:
+-            self.env.set_init_state(self.init_states[0])
++            obs = self.env.set_init_state(self.init_states[0])
+         return obs, {}
+ 
+     def step(self, action: list[float]) -> tuple[Any, float, bool, dict[str, Any]]:

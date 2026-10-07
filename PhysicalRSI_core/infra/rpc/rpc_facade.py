@@ -301,6 +301,13 @@ class ServiceHost:
                 except Exception:
                     logger.warning("session sweep: drop %s failed", sid, exc_info=True)
 
+    def _make_rpc_server(self, transport, host, port, dispatch):
+        from PhysicalRSI_core.infra.rpc.http_rpc import HttpRpcServer
+        from PhysicalRSI_core.infra.rpc.socket_rpc import SocketRpcServer
+
+        server_cls = HttpRpcServer if transport == "http" else SocketRpcServer
+        return server_cls((host, port), dispatch)
+
     def _bind_and_announce(
         self,
         transport: Literal["socket", "http"],
@@ -313,14 +320,11 @@ class ServiceHost:
         Returns the bound server, whose ``server_address`` reflects the
         actually-bound ``(host, port)`` (useful when ``port == 0``).
         """
-        from PhysicalRSI_core.infra.rpc.http_rpc import HttpRpcServer
-        from PhysicalRSI_core.infra.rpc.socket_rpc import SocketRpcServer
-
-        server_cls = HttpRpcServer if transport == "http" else SocketRpcServer
-        server = server_cls((host, port), dispatch)
+        server = self._make_rpc_server(transport, host, port, dispatch)
         bound_host, bound_port = server.server_address
         client_host = "127.0.0.1" if bound_host == "0.0.0.0" else bound_host
-        url = f"{transport}://{client_host}:{bound_port}"
+        scheme = getattr(server, "scheme", transport)
+        url = f"{scheme}://{client_host}:{bound_port}"
         import os
 
         from PhysicalRSI_core.infra.storage import atomic_json

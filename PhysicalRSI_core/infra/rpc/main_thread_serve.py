@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 import traceback
 from typing import Any, Literal
 
@@ -44,6 +45,26 @@ class FixedThreadDispatch:
     ahead of :class:`ServiceHost` and inherit ``serve`` as-is; they do not need
     to wrap it.
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Auxiliary local listeners can enqueue before serve() binds its RPC
+        # listener. Never replace their queue during startup.
+        self._main_thread_queue = queue.Queue()
+
+    def call_on_main_thread(self, function, *, deadline):
+        """Submit an internal callable; transport payloads cannot select this path."""
+        if not callable(function) or time.monotonic() >= deadline or self._shutdown_event.is_set():
+            raise TimeoutError("Internal controller operation expired before enqueue")
+        event = threading.Event()
+        request = dict(callback=function, deadline=deadline, result=None, error=None)
+        self._main_thread_queue.put((event, request))
+        while not event.wait(min(.05, max(0, deadline - time.monotonic()))):
+            if time.monotonic() >= deadline or self._shutdown_event.is_set():
+                raise TimeoutError("Internal controller operation has no observed completion")
+        if request["error"]:
+            raise RuntimeError(request["error"])
+        return request["result"]
 
     def _dispatch_main_thread(
         self, method: str, args: tuple, kwargs: dict, *, session_id: str | None = None
@@ -101,9 +122,6 @@ class FixedThreadDispatch:
         Exits when the shutdown event is set (``shutdown`` RPC or
         *parent_watch* parent death); both paths unblock the consumer loop.
         """
-        self._main_thread_queue: "queue.Queue[tuple[threading.Event, dict] | None]" = (
-            queue.Queue()
-        )
         if self._enable_sessions and (session_sweep_s is None or session_sweep_s <= 0):
             raise ValueError(
                 "session_sweep_s is required (and > 0) when sessions "
@@ -116,8 +134,6 @@ class FixedThreadDispatch:
         if parent_watch:
             watch_parent_death(self._shutdown_event.set)
         # Cleanup hooks may touch thread-affine model/environment state too.
-        import time
-
         last_sweep = time.monotonic()
 
         # Dispatch runs on THIS thread; poll the queue so shutdown via the
@@ -148,12 +164,14 @@ class FixedThreadDispatch:
                     break
                 event, req = item
                 try:
-                    req["result"] = self._dispatch(
-                        req["method"],
-                        req["args"],
-                        req["kwargs"],
-                        session_id=req["session_id"],
-                    )
+                    if "callback" in req:
+                        if time.monotonic() >= req["deadline"]:
+                            raise TimeoutError("Internal controller operation expired while queued")
+                        req["result"] = req["callback"]()
+                    else:
+                        req["result"] = self._dispatch(
+                            req["method"], req["args"], req["kwargs"], session_id=req["session_id"],
+                        )
                 except Exception:
                     req["error"] = traceback.format_exc()
                 event.set()

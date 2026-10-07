@@ -24,6 +24,10 @@ class Cancelled(RuntimeError):
     """Cooperative cancellation, including deadline expiry."""
 
 
+class ReconciliationRequired(RuntimeError):
+    """An uncertain external effect must be inspected before reuse or retry."""
+
+
 @dataclass(frozen=True)
 class Context:
     episode: str
@@ -31,6 +35,9 @@ class Context:
     deadline: float | None = None
     execution: Callable | None = field(default=None, compare=False, repr=False)
     harness_revision: str = ""
+    # A controller can attach a cooperative ownership/liveness check. It is
+    # transient execution context, never part of a frozen harness artifact.
+    validity: Callable[[], None] | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self):
         from PhysicalRSI_core.infra.storage import identifier
@@ -42,6 +49,10 @@ class Context:
             self.deadline is not None and monotonic() >= self.deadline
         ):
             raise Cancelled("Execution cancelled or deadline exceeded")
+        if self.validity is not None:
+            self.validity()
+            if self.cancelled.is_set() or (self.deadline is not None and monotonic() >= self.deadline):
+                raise Cancelled("Execution cancelled or deadline exceeded while checking validity")
 
 
 @dataclass(frozen=True)

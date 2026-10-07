@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import time
 from pathlib import Path
 
 from .batch import ProcessJob, run_batch
@@ -79,18 +80,33 @@ def execute(
     handlers=None,
     max_calls=100,
     cancelled=None,
+    deadline=None,
+    expected_runtime_sha256=None,
+    teardown_s=2,
 ):
     if sys.platform != "linux" or os.geteuid() != 0:
         raise RuntimeError(
             "Linux chroot privilege is required; execution was not started"
         )
+    started = time.monotonic()
     if (
         not math.isfinite(timeout_s)
         or timeout_s <= 0
         or memory_bytes <= 0
         or output_bytes <= 0
+        or not math.isfinite(teardown_s) or teardown_s <= 0
+        or (deadline is not None and not math.isfinite(deadline))
     ):
         raise ValueError("Positive finite isolation limits required")
+    deadline = min(deadline, started + timeout_s) if deadline is not None else started + timeout_s
+
+    def check():
+        if cancelled is not None and cancelled.is_set():
+            raise RuntimeError("Isolated program cancelled")
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Isolation deadline reached during preparation or execution")
+
+    check()
     if handlers is not None and (
         type(max_calls) is not int
         or max_calls < 1
@@ -102,6 +118,8 @@ def execute(
         )
     runtime = Path(runtime).resolve()
     manifest = read_json(runtime / "manifest.json")
+    if expected_runtime_sha256 is not None and digest(manifest) != expected_runtime_sha256:
+        raise ValueError("Pinned isolation runtime manifest changed")
     if manifest.get("schema") != "physicalrsi.isolation-runtime/v1":
         raise ValueError("Unsupported isolation runtime schema")
     for name in manifest["files"]:
@@ -137,6 +155,7 @@ def execute(
     jail = root / "root"
     jail.mkdir()
     for name, sha in manifest["files"].items():
+        check()
         path = runtime / name
         if (
             path.is_symlink()
@@ -155,6 +174,7 @@ def execute(
     result_path = result_dir / "result.json"
     result_path.touch()
     for path in jail.rglob("*"):
+        check()
         path.chmod(
             0o555
             if path.is_dir()
@@ -165,6 +185,7 @@ def execute(
     os.chown(result_path, 65534, 65534)
     result_path.chmod(0o600)
     jail.chmod(0o555)
+    check()
     job = ProcessJob(
         "isolated",
         (
@@ -179,7 +200,7 @@ def execute(
             str(output_bytes),
         ),
         root,
-        timeout_s=timeout_s,
+        timeout_s=deadline - time.monotonic(),
     )
     if handlers is not None:
         from .isolation_bridge import run
@@ -193,10 +214,14 @@ def execute(
             max_calls=max_calls,
             message_bytes=output_bytes,
             cancelled=cancelled,
+            deadline=deadline,
+            teardown_s=teardown_s,
         )
+        check()
         atomic_json(root / "result.json", result)
         return result
     process = run_batch([job], root / "processes", workers=1, cancelled=cancelled)[0]
+    check()
     if process["state"] != "completed" or process["returncode"] != 0:
         raise RuntimeError("Isolated program failed; inspect retained process evidence")
     result = read_json(result_path)

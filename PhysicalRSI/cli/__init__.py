@@ -2,12 +2,18 @@
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "operator":
+        from PhysicalRSI.operator import main as operator_main
+        return operator_main(argv[1:])
     parser = argparse.ArgumentParser(
-        prog="physicalrsi", description="physicalRSI · composable embodied intelligence"
+        prog="physicalrsi", description="physicalRSI · composable embodied intelligence",
+        epilog="Use 'physicalrsi operator --help' for explicit local device inspection and recovery.",
     )
     parser.add_argument("--workspace", type=Path, default=Path(".physicalrsi"))
     parser.add_argument("--plain", action="store_true", help="Plain terminal text")

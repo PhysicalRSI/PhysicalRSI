@@ -35,10 +35,11 @@ class ServiceSpec:
 
 
 class Services:
-    def __init__(self, root, *, pool=None, events=None):
+    def __init__(self, root, *, pool=None, events=None, client_factory=make_rpc_client):
         self.root = Path(root) / uuid.uuid4().hex
         self.pool = pool
         self.events = events or NullEvents()
+        self.client_factory = client_factory
         self.handles = {}
 
     def start(self, specifications):
@@ -99,7 +100,7 @@ class Services:
                     if time.monotonic() >= deadline:
                         raise TimeoutError(f"{spec.name} did not announce an endpoint")
                     time.sleep(0.02)
-                client = make_rpc_client(endpoint, enable_sessions=spec.sessions)
+                client = self.client_factory(endpoint, enable_sessions=spec.sessions)
                 handle["client"] = client
                 wait_for_ready(
                     client,

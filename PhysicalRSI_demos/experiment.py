@@ -1,14 +1,24 @@
 """Runnable CPU example of independently verified experiments."""
+from PhysicalRSI_core.contracts import Contract
+from PhysicalRSI_core.embodiment import Embodiment, System1
 from PhysicalRSI_core.experiments import Budget, ExperimentRuntime
+from PhysicalRSI_core.infra.storage import digest
+
+OBSERVATION = Contract("counter-position", unit="count", embodiment="software-counter")
+ACTION = Contract("counter-increment", unit="count", embodiment="software-counter")
 
 
 class CounterEnvironment:
+    def describe(self):
+        return Embodiment("software-counter", "1", "software", OBSERVATION, ACTION)
+
     def identity(self):
         return {"name": "counter", "revision": "1", "scope": "software"}
 
     def reset(self, case, context):
         self.position, self.target = case["initial"], case["target"]
-        return {"ready": True, "observation": {"position": self.position}}
+        return {"ready": True, "observation": {"position": self.position},
+                "terminated": self.position == self.target}
 
     def step(self, action, context):
         self.position += action
@@ -21,6 +31,12 @@ class CounterPolicy:
 
     def identity(self):
         return {"name": "increment", "increment": self.increment}
+
+    def describe(self):
+        return System1("increment", digest(self.identity()), OBSERVATION, ACTION)
+
+    def begin_episode(self, task, case, observation, context):
+        pass  # This controller has no episode history.
 
     def act(self, observation, context):
         return self.increment

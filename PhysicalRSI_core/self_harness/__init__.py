@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
+from PhysicalRSI_core.contracts import ReconciliationRequired
 from PhysicalRSI_core.infra.storage import (
     atomic_json,
     digest,
@@ -18,6 +19,7 @@ from PhysicalRSI_core.infra.storage import (
 )
 
 from .artifacts import verify_harness
+from .selection import validate_profile
 
 
 def now():
@@ -39,10 +41,6 @@ class Evaluator(Protocol):
     ) -> dict: ...
 
 
-class ReconciliationRequired(RuntimeError):
-    """A started external effect must be reconciled before any retry."""
-
-
 class SelfHarness:
     def __init__(
         self,
@@ -59,6 +57,7 @@ class SelfHarness:
     ):
         if type(max_candidates) is not int or not 1 <= max_candidates <= 32:
             raise ValueError("Bounded candidate budget required")
+        validate_profile(profile)
         self.root = Path(root).resolve()
         self.state, self.proposer, self.evaluator, self.selector = (
             state,
@@ -86,6 +85,7 @@ class SelfHarness:
             selector=self.selector.identity(),
             core=file_digest(Path(__file__)),
             artifacts=file_digest(Path(__file__).with_name("artifacts.py")),
+            scoring=file_digest(Path(__file__).with_name("selection.py")),
         )
 
     def _stable(self):
@@ -94,7 +94,7 @@ class SelfHarness:
         if self.identities() != self.config["identities"]:
             raise ValueError("Executable port or core identity changed")
 
-    def _step(self, name, inputs, call):
+    def _step(self, name, inputs, call, *, recover=None):
         # Adapted from v1 RSI._step: completed work resumes, unknown work blocks.
         self._stable()
         path = self.root / (name + ".json")
@@ -103,14 +103,21 @@ class SelfHarness:
             record = read_json(path)
             if record["input_sha256"] != identity:
                 raise ValueError("Checkpoint inputs changed: " + name)
-            if record["state"] != "completed":
+            if record["state"] == "completed":
+                if digest(record["output"]) != record["output_sha256"]:
+                    raise ValueError("Checkpoint output changed")
+                return deepcopy(record["output"])
+            if record["state"] != "started" or recover is None:
                 raise ReconciliationRequired(
                     "Reconcile uncertain stage before retry: " + str(path)
                 )
-            if digest(record["output"]) != record["output_sha256"]:
-                raise ValueError("Checkpoint output changed")
-            return deepcopy(record["output"])
-        record = dict(state="started", input_sha256=identity, started_at=now())
+            # Explicit port recovery owns its finer-grained durable receipts.
+            # This is never permission to repeat an unknown physical effect.
+            call = recover
+            record = dict(record, recovery_attempts=record.get("recovery_attempts", 0) + 1,
+                          resumed_at=now())
+        else:
+            record = dict(state="started", input_sha256=identity, started_at=now())
         atomic_json(path, record)
         try:
             output = call()
@@ -135,6 +142,10 @@ class SelfHarness:
     def run(self):
         with locked(self.root / ".run.lock"):
             return self._run()
+
+    def _recovery(self, port, name, *args):
+        method = getattr(port, name, None)
+        return (lambda: method(*deepcopy(args), self.root)) if callable(method) else None
 
     def _run(self):
         anchor_path = self.root / "parent.json"
@@ -161,6 +172,7 @@ class SelfHarness:
             "develop",
             parent_sha,
             lambda: self.proposer.develop(deepcopy(parent), self.root),
+            recover=self._recovery(self.proposer, "resume_development", parent),
         )
         if feedback.get("split") != "evolve" or not feedback.get("evidence"):
             raise ValueError("Development evidence, including failures, required")
@@ -170,6 +182,7 @@ class SelfHarness:
             lambda: self.proposer.propose(
                 deepcopy(parent), deepcopy(feedback), self.root
             ),
+            recover=self._recovery(self.proposer, "resume_proposal", parent, feedback),
         )
         if (
             not isinstance(children, list)
@@ -261,6 +274,7 @@ class SelfHarness:
             "validation",
             comparison,
             lambda: self.evaluator.validation(deepcopy(comparison), self.root),
+            recover=self._recovery(self.evaluator, "resume_validation", comparison),
         )
         if (
             cohort.get("split") != "validation"
@@ -294,6 +308,7 @@ class SelfHarness:
                 lambda h=h: self.evaluator.evaluate(
                     deepcopy(h), deepcopy(comparison), deepcopy(cohort), self.root
                 ),
+                recover=self._recovery(self.evaluator, "resume_evaluation", h, comparison, cohort),
             )
             if {p["id"]: verify_harness(p) for p in pool} != hashes:
                 raise ValueError("Executable changed during evaluation")

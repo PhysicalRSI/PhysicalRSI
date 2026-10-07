@@ -1,5 +1,23 @@
 # PhysicalRSI-baselines
 
+## Research studies
+
+- [Embodied Goodhart's Law](embodied_goodharts_law/README.md) (`egl`): a research
+  specification for System 2 → GPT System 1 → CAP optimization and simulation
+  benchmark proxy failures, using ASPIRE as the Code-as-Policies reference.
+  Planned coverage: LIBERO, LIBERO-Plus and RoboTwin. Adapters and results are
+  pending; no exploit result or simulator qualification is claimed.
+
+## Laboratory automation
+
+- [Opentrons liquid handling](opentrons_liquid_handling/README.md): an ASPIRE-like
+  code-policy baseline for serial dilution, with upstream API simulation and an
+  independent ideal mass-balance audit. The first
+  [PhysicalRSI Autoresearch scenario](../PhysicalRSI_Autoresearch/README.md) compares
+  method variants and records evidence. No wet-lab qualification is claimed.
+
+## RoboDojo baseline
+
 The RoboDojo baseline imports **PhysicalRSI's XPolicyLab PR #147** as a pinned git submodule. This organization-owned submission carries forward yanming03's original PR #144. It preserves the complete fork, its adapter runtime, evaluation scripts, source and license notices.
 
 - PR: https://github.com/XPolicyLab/XPolicyLab/pull/147

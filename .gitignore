@@ -38,3 +38,6 @@ wandb/
 !docs/media/*.gif
 !PhysicalRSI_demos/media/*.mp4
 .preview/
+
+# Local research trajectory
+/traj.md

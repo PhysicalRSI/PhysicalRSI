@@ -38,6 +38,21 @@ Write repository documentation in English. Use `physicalRSI`, `PhysicalRSI`, `Sy
 
 Explain commands with copyable examples and say what the command actually proves. Keep claims about simulators, videos, checkpoints, training, and physical robots precise.
 
+## Active research heartbeat
+
+The user requests a research review every 30 minutes while the benchmark goal
+is active. Inspect the durable heartbeat at
+`/cpfs02/user/shaoyanming/egl_runtime/autoresearch-heartbeat-001/state.json` on
+continuation and before lengthy new experiments. When pending, verify current
+processes and new results, reflect on the causal hypothesis, use autoresearch
+to compare alternatives when progress stalls, and record an evidence-backed
+review through `PhysicalRSI_Autoresearch.heartbeat.ResearchHeartbeat.complete`.
+A queued timer event is not a completed research review. Do not provision new
+experiment instances for any benchmark in the simulation or agent partitions.
+Other partitions may be used when eligible spare capacity is verified; release
+borrowed capacity after use. Check the current quota identity before provisioning;
+historical launchers do not override this policy. Do not mutate active experiment sources.
+
 ## Before finishing a change
 
 Run the smallest relevant check, then the full smoke suite when shared CLI or contract code changed:

@@ -49,6 +49,20 @@ def read_json(path):
     return json.loads(Path(path).read_text())
 
 
+def strict_json(payload):
+    """Decode bounded caller-supplied JSON without ambiguous keys or numbers."""
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("Duplicate JSON member")
+            result[key] = value
+        return result
+    value = json.loads(payload, object_pairs_hook=pairs)
+    canonical(value)
+    return value
+
+
 def atomic_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

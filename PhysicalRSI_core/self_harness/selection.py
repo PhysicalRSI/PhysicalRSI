@@ -60,7 +60,12 @@ def comparison_identity(comparison):
     for name, freeze in candidates.items():
         identifier(name)
         _sha(freeze)
-    profile = comparison["profile"]
+    validate_profile(comparison["profile"])
+    return digest(comparison)
+
+
+def validate_profile(profile):
+    """Reject an invalid scoring protocol before any development or trials."""
     tasks = profile["tasks"]
     if not tasks:
         raise ValueError("Empty task scope")
@@ -83,7 +88,6 @@ def comparison_identity(comparison):
         raise ValueError(
             "Optional cost/qualification policies are not admitted in the minimal core"
         )
-    return digest(comparison)
 
 
 def validate_admission_binding(
@@ -193,6 +197,10 @@ def select_survivor(
     pool = comparison["candidates"]
     if len(results) != len(pool) or {r["candidate_id"] for r in results} != set(pool):
         raise ValueError("Missing, duplicate or unexpected candidate result")
+    if any("experiment_protocol_sha256" in result for result in results):
+        protocols = {_sha(result.get("experiment_protocol_sha256")) for result in results}
+        if len(protocols) != 1:
+            raise ValueError("Paired experiment execution or scoring protocols differ")
     root = Path(evidence_root).resolve()
     metrics = {}
     revisions = set()

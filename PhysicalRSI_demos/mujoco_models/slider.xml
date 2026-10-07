@@ -1,0 +1,12 @@
+<mujoco model="physicalrsi_slider_fixture">
+  <option timestep="0.002" gravity="0 0 0" integrator="implicitfast"/>
+  <worldbody>
+    <body name="carriage" pos="0 0 0.2">
+      <joint name="axis" type="slide" axis="1 0 0" range="-1 1" damping="0.5"/>
+      <geom type="sphere" size="0.04" mass="1"/>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="force" joint="axis" ctrllimited="true" ctrlrange="-10 10"/>
+  </actuator>
+</mujoco>

@@ -6,6 +6,9 @@ and retain exclusive effects until the operation actually returns.
 
 import time
 import uuid
+import hashlib
+import os
+import stat
 from contextlib import ExitStack
 from dataclasses import asdict
 from pathlib import Path
@@ -15,18 +18,80 @@ from PhysicalRSI_core.contracts import Cancelled
 
 from .artifacts import Artifacts
 from .events import Event, NullEvents
-from .storage import atomic_json
+from .storage import atomic_json, identifier, strict_json
 
 
 class Execution:
     def __init__(self, root, *, observe=None, events=None):
-        self.root = Path(root)
+        self.root = Path(root).resolve()
         self.observe = observe
         self.events = events or NullEvents()
         self._condition = Condition()
         self._effects = {}
         self._active = {}
         self.artifacts = Artifacts(self.root / "artifacts")
+
+    def read(self, episode, call_id, *, max_record_bytes=1024 * 1024,
+             max_artifact_bytes=64 * 1024 * 1024, expected_sha256=None):
+        """Inspect a bounded journal snapshot and its unique local artifacts.
+
+        This does not retry an operation or reinterpret its outcome. Supply an
+        independently retained record digest when checking an earlier snapshot.
+        """
+        if any(type(limit) is not int or limit < 0 for limit in (max_record_bytes, max_artifact_bytes)):
+            raise ValueError("Execution inspection requires nonnegative byte allowances")
+        if expected_sha256 is not None and (not isinstance(expected_sha256, str) or len(expected_sha256) != 64
+                or any(c not in "0123456789abcdef" for c in expected_sha256)):
+            raise ValueError("Expected execution digest must be a SHA256")
+        folder = self.root / identifier(episode)
+        path = folder / (identifier(call_id) + ".json")
+        if folder.is_symlink() or not stat.S_ISREG(path.lstat().st_mode):
+            raise ValueError("Execution journal must be a physical regular file")
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as stream:
+            metadata = os.fstat(stream.fileno())
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > max_record_bytes:
+                raise ValueError("Execution journal exceeds its byte allowance or is not regular")
+            payload = stream.read(max_record_bytes + 1)
+        if len(payload) > max_record_bytes:
+            raise ValueError("Execution journal exceeds its byte allowance")
+        sha = hashlib.sha256(payload).hexdigest()
+        if expected_sha256 is not None and sha != expected_sha256:
+            raise ValueError("Execution journal differs from the expected snapshot")
+        record = strict_json(payload)
+        if (not isinstance(record, dict) or record.get("id") != call_id or record.get("episode") != episode
+                or record.get("state") not in {"started", "completed", "failed", "cancelled", "uncertain"}
+                or "input" not in record or (record["state"] == "completed" and "output" not in record)):
+            raise ValueError("Execution record identity, state or payload is invalid")
+        references, remaining = {}, max_artifact_bytes
+
+        def verify(value):
+            nonlocal remaining
+            if isinstance(value, dict):
+                if "artifact" in value and {"sha256", "bytes"}.intersection(value):
+                    name = value["artifact"]
+                    if not isinstance(name, str):
+                        raise ValueError("Artifact location must be a string")
+                    if name in references:
+                        if value != references[name]:
+                            raise ValueError("Conflicting references to one execution artifact")
+                    else:
+                        content = self.artifacts.read(value, max_bytes=remaining)
+                        remaining -= len(content)
+                        references[name] = dict(value)
+                else:
+                    for item in value.values():
+                        verify(item)
+            elif isinstance(value, list):
+                for item in value:
+                    verify(item)
+
+        for field in ("input", "output", "observation"):
+            if field in record:
+                verify(record[field])
+        return dict(schema="physicalrsi.execution-inspection/v1", record=record, record_sha256=sha,
+                    artifacts=[references[name] for name in sorted(references)],
+                    artifact_bytes=max_artifact_bytes - remaining)
 
     def cancel_and_wait(self, episode, timeout=5):
         until = time.monotonic() + timeout

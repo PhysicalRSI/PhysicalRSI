@@ -1,0 +1,54 @@
+{
+  "scope": "curated-research-starting-points",
+  "reviewed_on": "2026-10-06",
+  "sources": [
+    {
+      "id": "code-as-policies",
+      "url": "https://arxiv.org/abs/2209.07753",
+      "title": "Code as Policies: Language Model Programs for Embodied Control",
+      "use": "Represent behavior as executable compositions of available robot APIs."
+    },
+    {
+      "id": "aspire",
+      "url": "https://github.com/NVlabs/ASPIRE",
+      "title": "ASPIRE",
+      "use": "Reference for improving reusable code-policy skills from execution evidence; this baseline is inspired by, not an upstream reproduction of, ASPIRE."
+    },
+    {
+      "id": "coscientist",
+      "url": "https://www.nature.com/articles/s41586-023-06792-0",
+      "title": "Autonomous chemical research with large language models",
+      "use": "Reference architecture connecting literature/documentation search, code execution and laboratory automation; its experimental results do not transfer to this software baseline."
+    },
+    {
+      "id": "opentrons-tutorial",
+      "url": "https://docs.opentrons.com/python-api/tutorial/",
+      "title": "Opentrons Python API Tutorial",
+      "use": "Serial dilution is an existing robot protocol task with documented labware and pipette commands."
+    },
+    {
+      "id": "opentrons",
+      "url": "https://github.com/Opentrons/opentrons",
+      "title": "Opentrons open-source software",
+      "use": "Selected executable upstream dependency: opentrons==8.8.2, OT-2 API 2.19. No upstream code is vendored."
+    },
+    {
+      "id": "chemgymrl",
+      "url": "https://github.com/chemgymrl/chemgymrl",
+      "title": "ChemGymRL",
+      "use": "Alternative for reaction/extraction/distillation policy research; deferred because this first baseline prioritizes a robot protocol interface."
+    },
+    {
+      "id": "karpathy-autoresearch",
+      "url": "https://github.com/karpathy/autoresearch/blob/master/program.md",
+      "title": "autoresearch experiment protocol",
+      "use": "Baseline-first experimentation, fixed evaluation boundary, bounded trials and keep/discard/error history; adapted without copying implementation."
+    },
+    {
+      "id": "ai-scientist-experiments",
+      "url": "https://github.com/SakanaAI/AI-Scientist/blob/main/ai_scientist/perform_experiments.py",
+      "title": "The AI Scientist experiment runner",
+      "use": "Hypothesis-driven experiments with explicit execution budgets and retained outputs; no claim of reproducing autonomous scientific discovery."
+    }
+  ]
+}

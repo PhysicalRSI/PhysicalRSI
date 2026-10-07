@@ -44,6 +44,12 @@ Bring your own robot, simulator, policy, and research questions. Compose them in
 
 ## Quick guidance
 
+For hypothesis-driven robot protocol experiments, see
+[PhysicalRSI Autoresearch](PhysicalRSI_Autoresearch/README.md): a resumable
+liquid-handling research loop with upstream Opentrons simulation, independent
+liquid auditing, and recorded keep/discard decisions. It runs software protocols;
+it does not establish wet-lab qualification.
+
 ```bash
 git clone --recurse-submodules https://github.com/PhysicalRSI/PhysicalRSI.git
 cd PhysicalRSI
