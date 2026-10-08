@@ -53,6 +53,7 @@ def test_installed_runtime_imports_without_source_checkout(tmp_path):
     assert 'runtime-import-ok' in result.stdout
     assert (destination / 'runtime/PhysicalRSI_baselines/robodojo/configs/skill_compositions.json').is_file()
     assert not (destination / 'runtime/PhysicalRSI_baselines/robodojo/trained_policy').exists()
+    assert not (destination / 'runtime/PhysicalRSI_baselines/dexterous').exists()
     assert (destination / 'runtime/PhysicalRSI_baselines/robodojo/skills/LICENSE.openpi').is_file()
 
 

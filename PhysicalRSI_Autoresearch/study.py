@@ -101,28 +101,30 @@ def _verify(root, state):
 
 
 def _reports(root, state):
+    manifest = json.loads((root / "study.json").read_text())
+    metrics = manifest.get("metrics", ["tips", "commands"])
     out = io.StringIO()
     writer = csv.writer(out, delimiter='\t')
-    writer.writerow(['round', 'candidate', 'status', 'tips', 'commands', 'parent', 'receipt'])
+    writer.writerow(['round', 'candidate', 'status', *metrics, 'parent', 'receipt'])
     for row in state['rounds']:
-        writer.writerow([row[k] for k in ('round', 'candidate', 'status', 'tips', 'commands', 'parent', 'receipt')])
+        writer.writerow([row[k] for k in ('round', 'candidate', 'status', *metrics, 'parent', 'receipt')])
     (root / 'results.tsv').write_text(out.getvalue())
-    lines = ['# Research report', '', 'Scope: software protocol simulation and ideal liquid audit.',
+    lines = ['# Research report', '', 'Scope: ' + manifest['scope'],
              'Physical experiments: 0. Physical qualification: none.', '',
              f"State: {state['status']}. Selected candidate: {state['selected']}.", '',
-             '| Round | Candidate | Decision | Tips | Commands |', '|---|---|---|---|---|']
+             f'| Round | Candidate | Decision | {metrics[0]} | {metrics[1]} |', '|---|---|---|---|---|']
     for row in state['rounds']:
         # Names are untrusted prose; JSON escaping does not escape Markdown.
         name = row['candidate'].replace('|', '\\|').replace('\n', ' ')
-        lines.append(f"| {row['round']} | {name} | {row['status']} | {row['tips']} | {row['commands']} |")
+        lines.append(f"| {row['round']} | {name} | {row['status']} | {row[metrics[0]]} | {row[metrics[1]]} |")
     lines += ['', 'Selection uses development cases only. Ties retain the incumbent.',
               'Validation is run after the proposal budget is exhausted and never selects a survivor.',
               'These declared validation cases are public, not a secret held-out benchmark.',
-              'Mixing and contamination checks use an ideal model, not physical measurements.']
+              manifest.get('limitations', 'Mixing and contamination checks use an ideal model, not physical measurements.')]
     (root / 'report.md').write_text('\n'.join(lines) + '\n')
 
 
-def run_study(workspace, simulator, *, proposals=None, resume=False, max_rounds=None, trial_seconds=120):
+def run_study(workspace, simulator, *, proposals=None, resume=False, max_rounds=None, trial_seconds=120, domain=None):
     """Run or resume a frozen proposal batch; interruption preserves completed rounds.
 
     max_rounds bounds work in this invocation. Proposal/evaluator changes require
@@ -132,7 +134,8 @@ def run_study(workspace, simulator, *, proposals=None, resume=False, max_rounds=
         raise ValueError('Expected a trial budget of 0–3600 seconds')
     if max_rounds is not None and (type(max_rounds) is not int or max_rounds < 1):
         raise ValueError('Expected a positive round budget')
-    proposals = proposals_checked(DEFAULT_PROPOSALS if proposals is None else proposals)
+    proposals = (proposals_checked(DEFAULT_PROPOSALS if proposals is None else proposals)
+                 if domain is None else domain.proposals_checked(proposals))
     root = Path(workspace).resolve()
     manifest = {'schema': 'physicalrsi.autoresearch/v2', 'scope': 'software-protocol-research',
                 'question': 'Can serial dilution consume fewer tips while preserving the declared liquid audit?',
@@ -140,6 +143,18 @@ def run_study(workspace, simulator, *, proposals=None, resume=False, max_rounds=
                 'sources': _sources(), 'simulator': simulator.identity, 'trial_seconds': trial_seconds,
                 'selection': 'development validity, then total tips, then commands; incumbent wins ties',
                 'qualification': None, 'self_harness_admitted': False}
+    if domain is not None:
+        manifest.update(domain.manifest())
+        manifest['sources'].update(domain.sources())
+    metrics = manifest.get('metrics', ['tips', 'commands'])
+    if len(metrics) != 2 or len(set(metrics)) != 2:
+        raise ValueError('A domain must declare two distinct minimization metrics')
+    repo = Path(__file__).resolve().parent.parent
+    for name in manifest['sources']:
+        path = Path(name) if isinstance(name, str) else None
+        if (path is None or path.is_absolute() or not path.parts or '..' in path.parts
+                or not (repo / path).resolve().is_relative_to(repo)):
+            raise ValueError('Source path must stay inside the repository: ' + str(name))
     if not resume:
         root.mkdir(parents=True, exist_ok=False)
     elif not (root / 'state.json').is_file():
@@ -149,16 +164,20 @@ def run_study(workspace, simulator, *, proposals=None, resume=False, max_rounds=
             if json.loads((root / 'study.json').read_text()) != manifest:
                 raise ValueError('Study configuration or source changed; start a new workspace')
             for name, sha in manifest['sources'].items():
-                if file_digest(root / 'sources' / name) != sha:
+                target = root / 'sources' / name
+                if not target.resolve().is_relative_to(root / 'sources'):
+                    raise ValueError('Source snapshot escapes its directory: ' + name)
+                if file_digest(target) != sha:
                     raise ValueError('Source snapshot changed: ' + name)
             state = json.loads((root / 'state.json').read_text())
             _verify(root, state)
         else:
             atomic_json(root / 'study.json', manifest)
-            repo = Path(__file__).resolve().parent.parent
             for name, sha in manifest['sources'].items():
                 source = (repo / name).read_bytes()
                 target = root / 'sources' / name
+                if not target.resolve().is_relative_to(root / 'sources'):
+                    raise ValueError('Source snapshot escapes its directory: ' + name)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(source)
                 if file_digest(target) != sha:
@@ -183,18 +202,26 @@ def run_study(workspace, simulator, *, proposals=None, resume=False, max_rounds=
             started = time.monotonic()
             for i, spec in enumerate(cases):
                 trial = out / str(i); trial.mkdir()
-                actions = plan(Case(**spec), proposal['settings'])
-                atomic_json(trial / 'actions.json', actions)
-                protocol = trial / 'protocol.py'; protocol.write_text(protocol_source(actions))
-                result = audit(Case(**spec), actions)
-                try:
-                    simulation = simulator(protocol, trial, trial_seconds)
-                    if type(simulation.get('passed')) is not bool:
-                        raise ValueError('Simulator must return a boolean passed field')
-                except Exception as exc:
-                    simulation = {'passed': False, 'error': type(exc).__name__ + ': ' + str(exc)}
-                rows.append({'case': spec, 'audit': result, 'simulation': simulation,
-                             'passed': result['passed'] and simulation['passed']})
+                if domain is not None:
+                    row = domain.evaluate(proposal, spec, split, trial, trial_seconds)
+                    if type(row.get('passed')) is not bool or type(row.get('simulation', {}).get('passed')) is not bool:
+                        raise ValueError('Domain must return boolean passed and simulation.passed')
+                    if any(not math.isfinite(row['audit'][k]) for k in metrics):
+                        raise ValueError('Domain scores must be finite')
+                    rows.append(row)
+                else:
+                    actions = plan(Case(**spec), proposal['settings'])
+                    atomic_json(trial / 'actions.json', actions)
+                    protocol = trial / 'protocol.py'; protocol.write_text(protocol_source(actions))
+                    result = audit(Case(**spec), actions)
+                    try:
+                        simulation = simulator(protocol, trial, trial_seconds)
+                        if type(simulation.get('passed')) is not bool:
+                            raise ValueError('Simulator must return a boolean passed field')
+                    except Exception as exc:
+                        simulation = {'passed': False, 'error': type(exc).__name__ + ': ' + str(exc)}
+                    rows.append({'case': spec, 'audit': result, 'simulation': simulation,
+                                 'passed': result['passed'] and simulation['passed']})
             artifacts = {str(p.relative_to(out)): file_digest(p) for p in out.rglob('*') if p.is_file()}
             receipt = {'proposal': proposal, 'split': split, 'rows': rows, 'artifacts': artifacts,
                        'elapsed_seconds': time.monotonic() - started, 'qualification': None}
@@ -207,10 +234,10 @@ def run_study(workspace, simulator, *, proposals=None, resume=False, max_rounds=
             if max_rounds is not None and completed >= max_rounds:
                 break
             proposal = proposals[index]
-            receipt, ref = evaluate(proposal, DEVELOPMENT, 'development', index)
+            receipt, ref = evaluate(proposal, manifest['development'], 'development', index)
             rows = receipt['rows']
             valid = all(r['passed'] for r in rows)
-            score = [sum(r['audit'][k] for r in rows) for k in ('tips', 'primitive_commands')]
+            score = [sum(r['audit'][k] for r in rows) for k in (('tips', 'primitive_commands') if domain is None else metrics)]
             status = 'keep' if valid and (state['best_score'] is None or score < state['best_score']) else 'discard'
             if any(not r['simulation']['passed'] for r in rows):
                 status = 'error'
@@ -218,7 +245,7 @@ def run_study(workspace, simulator, *, proposals=None, resume=False, max_rounds=
             if status == 'keep':
                 state.update(selected=proposal['name'], best_score=score)
             state['rounds'].append({'round': index, 'candidate': proposal['name'], 'parent': parent,
-                                    'status': status, 'tips': score[0], 'commands': score[1], 'receipt': ref['path']})
+                                    'status': status, metrics[0]: score[0], metrics[1]: score[1], 'receipt': ref['path']})
             state['evidence'].append(ref)
             atomic_json(root / 'state.json', state)
             _reports(root, state)
@@ -226,7 +253,7 @@ def run_study(workspace, simulator, *, proposals=None, resume=False, max_rounds=
         if len(state['rounds']) == len(proposals):
             if state['selected'] is not None:
                 selected = next(p for p in proposals if p['name'] == state['selected'])
-                receipt, ref = evaluate(selected, VALIDATION, 'validation', 0)
+                receipt, ref = evaluate(selected, manifest['validation'], 'validation', 0)
                 state['evidence'].append(ref)
                 state['validation_passed'] = all(r['passed'] for r in receipt['rows'])
             else:
