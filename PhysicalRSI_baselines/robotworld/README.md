@@ -45,7 +45,14 @@ runtime remain deployment prerequisites.
    including all trials, inference cost and human interventions. Final test
    results are report-only and cannot select a candidate.
 
-The inventory adapter is implemented. Runtime execution, Self-Harness integration,
+The inventory adapter and `receipts.robocasa_receipt` are implemented. The receipt
+reader validates one native episode against its task, seed and horizon, preserves
+completed failures, and rejects probes and infrastructure/timeout outcomes before
+selection. It does not authenticate an arbitrary producer or bind a candidate;
+those checks belong to the evaluator integration. Unit fixtures are not native
+benchmark evidence.
+
+Runtime execution, Self-Harness integration,
 selection and simulator qualification are still pending. On initial inspection,
 the existing host exposed an idle NVIDIA GPU but no reachable Docker daemon;
 this is a deployment finding, not a task failure. Do not provision instances in
