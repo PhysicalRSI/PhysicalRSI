@@ -106,7 +106,17 @@ On this DSW, bubblewrap's new procfs mount returned `Operation not permitted`.
 trusted upstream command: retain its namespaces and mounts, but provide an
 empty `/proc` directory. It never bind-mounts the host's `/proc`. A host diagnostic
 verified hidden project paths, read-only observations, writable workspace and
-startup of the installed Codex binary. The pinned source runtime and complete
-agent interaction remain unverified. Record this variant separately; do not
+startup of the installed Codex binary. The pinned source app-server subsequently
+failed initialization because it requires `/proc/self/exe`.
+`isolation.minimal_proc_command` adds only a fixed link to the already bound
+`/runtime/codex-app-server`; this variant passed initialization and thread
+creation with the pinned source build. It is not general procfs emulation:
+subprocess executable discovery and complete agent/tool interaction still need
+validation. Record this variant separately; do not
 silently fall back, claim unchanged official deployment, or infer full isolation
 qualification from these limited checks.
+
+The pinned V8 helper archive returned HTTP 404. The app-server and CLI build
+completed without that helper, using the upstream documented
+`WORLD_CODEX_DISABLE_CODE_MODE=1` direct-tool mode. Keep that change in the
+runtime identity; it does not enable environment-side `code_control`.

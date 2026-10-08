@@ -25,3 +25,20 @@ def empty_proc_command(command):
         raise ValueError('Preserve upstream user and PID namespaces')
     args[index] = '--dir'
     return args
+
+
+def minimal_proc_command(command):
+    """Add only the pinned app-server's executable link, without host procfs.
+
+    This fixed link supports Codex startup; it is not general procfs emulation
+    and subprocesses cannot use it to discover their own executable correctly.
+    The caller must separately validate runtime/tool compatibility.
+    """
+    args = empty_proc_command(command)
+    executable = '/runtime/codex-app-server'
+    if executable not in args:
+        raise ValueError('Expected the upstream app-server executable path')
+    index = next(i for i in range(len(args) - 1)
+                 if args[i:i + 2] == ['--dir', '/proc']) + 2
+    args[index:index] = ['--dir', '/proc/self', '--symlink', executable, '/proc/self/exe']
+    return args
