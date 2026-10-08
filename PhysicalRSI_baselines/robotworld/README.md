@@ -57,3 +57,17 @@ selection and simulator qualification are still pending. On initial inspection,
 the existing host exposed an idle NVIDIA GPU but no reachable Docker daemon;
 this is a deployment finding, not a task failure. Do not provision instances in
 the simulation or agent partitions to work around it.
+
+## Self-Harness campaign binding
+
+`workflow.campaign(...)` connects a verified catalog and explicitly selected tasks
+to the existing `SelfHarness`, `ImprovementCampaign`, paired native-success
+selector and `HarnessState`. The protocol freezes original task budgets and keeps
+`code_control=False`. Proposer/evaluator executable identities are frozen by core.
+
+This entry point requires real proposer and evaluator ports. Those ports must
+bind native launches, reset identities, policy isolation and independent receipts
+to the frozen candidate. It does not infer admission from a parsed JSON result.
+The runtime ports and the first native campaign are not complete yet. A caller
+can run the configured campaign with `.run(initial_harness)` only after supplying
+those ports and a complete, verified initial harness closure.
