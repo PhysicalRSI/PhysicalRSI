@@ -53,6 +53,15 @@ Other partitions may be used when eligible spare capacity is verified; release
 borrowed capacity after use. Check the current quota identity before provisioning;
 historical launchers do not override this policy. Do not mutate active experiment sources.
 
+On continuation, inspect the explicit research index at
+`/cpfs02/user/shaoyanming/egl_runtime/autoresearch-pipeline-001/index.json` with
+`python -m PhysicalRSI_Autoresearch.records --index <path>`.
+For an indexed research track, resume its persisted next action and use
+`ResearchRecord.complete_review` to bind heartbeat follow-through to its current
+revision. A dispatch claim requires process/workspace reconciliation before
+retrying; it is not evidence that a remote job is running. See
+`docs/autoresearch-records.md` for the record lifecycle and remaining boundaries.
+
 ## Before finishing a change
 
 Run the smallest relevant check, then the full smoke suite when shared CLI or contract code changed:

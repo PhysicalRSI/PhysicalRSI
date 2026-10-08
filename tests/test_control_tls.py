@@ -168,6 +168,10 @@ def test_request_size_and_slow_body_and_connection_admission_are_bounded(secured
     client = controller_transport(endpoint, tls=client_policy(pki))
     with pytest.raises(RpcError, match="size limit"):
         client.call("effect", kwargs=dict(value="x" * 200), timeout_s=2)
+    # Receiving the response can precede the worker's finally/release. Wait for
+    # that completed request to return the sole slot before testing a new one.
+    assert server._slots.acquire(timeout=2), "Rejected request did not return its connection slot"
+    server._slots.release()
     # A fully authenticated but incomplete body occupies the one admitted slot.
     port = int(endpoint.rsplit(":", 1)[1])
     with socket.create_connection(("127.0.0.1", port), timeout=2) as raw:

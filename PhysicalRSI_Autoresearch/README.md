@@ -10,6 +10,23 @@ simulator and an independent ideal liquid audit. A successful API simulation
 alone cannot win. This is software research: no robot connects, no wet-lab
 measurement is produced, and `qualification` remains `null`.
 
+## Autoresearch v0.1 checkpoint
+
+This checkpoint adds scoped research memory and durable research records for
+the external-agent workflow. Lessons retain evidence and counterexamples across
+immutable revisions. Records bind a hypothesis to the selected parent, pinned
+memory, budget, experiment, result and explicit memory disposition. Heartbeat
+reviews can reference the exact next-action revision, and an index supports
+resuming registered research without guessing from historical directories.
+
+See [research records](../docs/autoresearch-records.md),
+[memory evolution](../docs/research-memory-evolution.md), and the
+[pipeline integration plan](../docs/autoresearch-pipeline.md). The regression
+suite includes a complete CPU Self-Harness campaign through the record lifecycle.
+Native launcher adoption, automatic research proposals, mechanism-based dispatch
+gates and resource scheduling remain subsequent integration work. This version
+does not establish a robotics success-rate improvement from memory.
+
 ## What the loop does
 
 1. Freeze the research question, development/validation cases, evaluator sources,
@@ -92,6 +109,11 @@ new hypothesis and prepare the next batch. Live literature retrieval and model
 API calls are not hidden inside the runner.
 
 ## Research heartbeat
+
+For benchmark research beyond this liquid-handling runner, use the opt-in
+[durable research record](../docs/autoresearch-records.md) to bind the hypothesis,
+selected parent, memory, experiment and result. Its heartbeat adapter records an
+exact next-action revision. It does not launch experiments or replace selection.
 
 An active research agent can use a durable 30-minute review queue:
 
