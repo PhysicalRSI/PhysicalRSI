@@ -192,6 +192,14 @@ Deployment closure review, a live native worker check and the core evaluator por
 remain required before a scored Self-Harness campaign. Python/package versions
 and the explicit isolation variant still need native qualification.
 
+`native_evaluator.RoboCasaNativeEvaluator` is the core port used by the campaign:
+it freezes task-index-derived reset cases, reserves distinct trial slots and
+translates only validated `RoboCasaTrials` receipts into the paired-selection
+episode schema. Its evaluator identity is copied into the frozen campaign
+protocol, so results from another worker or scoring implementation cannot enter
+selection. The port has not been run against the native simulator while the
+complete object population is still downloading.
+
 ## Frozen System 1 inputs
 
 `policy_bundle.edit_contract()` exposes three JSON files to System 2: guidance in

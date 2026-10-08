@@ -48,6 +48,9 @@ def campaign(workspace, *, catalog, benchmark, tasks, proposer, evaluator,
                     tasks=selected, code_control=False, metric='native_binary_success',
                     test_role='report_only', trial_role='paired_adaptation_validation',
                     reset_novelty='not_implied_by_repeated_rollouts')
+    # Self-Harness compares this identity with every evaluator result. Keeping
+    # it in the frozen protocol prevents a result from silently changing ports.
+    protocol['identity'] = evaluator.revision if hasattr(evaluator, 'revision') else digest(evaluator.identity())
     root = Path(workspace).resolve()
     state = HarnessState(root / 'state')
     def build_loop(directory):
