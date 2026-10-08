@@ -81,7 +81,7 @@ class RoboCasaNativeEvaluator:
                 evidence = {str((trial_root / name).relative_to(root)): value
                             for name, value in result['evidence'].items()}
                 episodes.append(dict(task=task, layout_sha256=digest(case), state='completed',
-                                     success=result['success'], score=result['score'],
+                                     success=result['outcome'] == 'success', score=result['score'],
                                      evidence_sha256=evidence))
         return dict(kind='policy_evaluation', candidate_id=candidate['id'],
                     freeze_sha256=sha, comparison_sha256=digest(comparison),
