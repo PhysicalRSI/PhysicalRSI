@@ -155,3 +155,26 @@ real isolated Codex proposals. Its two Self-Harness rounds produced `inherited`
 then `retained`, with complete proposal receipts and lineage. This verifies the
 software wiring only: it is neither a RoboCasa rollout nor benchmark improvement.
 Native evaluator ports, frozen task candidates and native selection remain pending.
+
+## Candidate-bound native trial execution
+
+`native_trials.RoboCasaTrials` is the durable launch primitive for the evaluator.
+It freezes the candidate closure, worker/deployment identity, deadline and full
+reset case before dispatch. A case names `task`, `launcher_seed`, `reset_seed`,
+`task_index`, `horizon`, `task_set`, `split` and `trial_slot`; the default one-episode
+protocol requires `reset_seed = launcher_seed + task_index`. Slots distinguish
+repeated fresh agent trials without claiming different layouts.
+
+The trusted worker receives `--deployment`, `--request` and `--output`. It must
+actually load the frozen candidate and write `execution-binding.json` containing
+the request digest, together with the upstream native episode/config receipts.
+The runner checks those receipts, stops its owned process group before marking
+completion and verifies candidate/source stability. Completed results replay
+without another simulator launch. Changed evidence fails closed; interrupted,
+timed-out or nonzero-exit attempts require reconciliation and cannot become zero
+scores. A binding JSON file alone is not proof of an arbitrary worker's honesty.
+
+Fixture tests cover completed-failure replay, result tampering, unresolved launch
+handling and effective reset identities. The native candidate-loading worker,
+admission gates and evaluator port are still required before this primitive can
+support a scored Self-Harness campaign.
