@@ -52,7 +52,7 @@ selection. It does not authenticate an arbitrary producer or bind a candidate;
 those checks belong to the evaluator integration. Unit fixtures are not native
 benchmark evidence.
 
-Runtime execution, Self-Harness integration,
+The campaign binding is implemented; native proposer/evaluator ports,
 selection and simulator qualification are still pending. On initial inspection,
 the existing host exposed an idle NVIDIA GPU but no reachable Docker daemon;
 this is a deployment finding, not a task failure. Do not provision instances in
@@ -71,3 +71,32 @@ to the frozen candidate. It does not infer admission from a parsed JSON result.
 The runtime ports and the first native campaign are not complete yet. A caller
 can run the configured campaign with `.run(initial_harness)` only after supplying
 those ports and a complete, verified initial harness closure.
+
+## Deployment and reset identity
+
+The first host diagnostic imported the pinned RoboCasa and robosuite sources
+with MuJoCo 3.3.1 and rendered an EGL test scene. The CloseDrawer probe then
+stopped during scene construction because `Window051/model.xml` was missing.
+It executed no task control steps and supplies neither a policy failure nor a
+success. The diagnostic uses host Python 3.12; the upstream container specifies
+Python 3.11, so deployment equivalence remains unverified.
+
+The pinned asset manifest contains 124,396 RoboCasa files (about 22.9 GiB).
+Scene-first restoration can reduce the initial download to 8,723 files
+(about 3.6 GiB, including shared resources) by postponing the object library.
+This is an incomplete deployment until every resource needed by the actual
+task is present and hash-verified. Missing resources must never trigger scene,
+object, seed or task substitutions to obtain a passing result. Preserve cached
+downloads and verify them against the release manifest before reuse.
+
+The native evaluator computes the effective reset seed as
+`launcher_seed + task_index * num_trials + episode_index`, where `task_index`
+comes from the selected upstream task registry. An evaluator port must bind
+that effective seed and registry identity to its launch and receipt. Checking
+only the command-line seed is insufficient. Repeated launches with the same
+effective reset are repeated trials, not held-out layouts. Paired candidate
+comparisons must preserve those identities and the original task horizon.
+
+An unchanged official agent run also requires the verified source-built Codex
+runtime and its isolated observation/action bridge. A host import or rendering
+probe does not establish agent isolation or qualify a benchmark result.
