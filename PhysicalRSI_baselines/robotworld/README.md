@@ -100,3 +100,13 @@ comparisons must preserve those identities and the original task horizon.
 An unchanged official agent run also requires the verified source-built Codex
 runtime and its isolated observation/action bridge. A host import or rendering
 probe does not establish agent isolation or qualify a benchmark result.
+
+On this DSW, bubblewrap's new procfs mount returned `Operation not permitted`.
+`isolation.empty_proc_command` provides an explicit deployment variant for a
+trusted upstream command: retain its namespaces and mounts, but provide an
+empty `/proc` directory. It never bind-mounts the host's `/proc`. A host diagnostic
+verified hidden project paths, read-only observations, writable workspace and
+startup of the installed Codex binary. The pinned source runtime and complete
+agent interaction remain unverified. Record this variant separately; do not
+silently fall back, claim unchanged official deployment, or infer full isolation
+qualification from these limited checks.
