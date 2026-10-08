@@ -175,9 +175,22 @@ timed-out or nonzero-exit attempts require reconciliation and cannot become zero
 scores. A binding JSON file alone is not proof of an arbitrary worker's honesty.
 
 Fixture tests cover completed-failure replay, result tampering, unresolved launch
-handling and effective reset identities. The native candidate-loading worker,
-admission gates and evaluator port are still required before this primitive can
-support a scored Self-Harness campaign.
+handling and effective reset identities. `native_worker.py` implements the trusted
+candidate-loading worker. Before launching, it checks the deployment's source
+hashes, the upstream asset manifest identity, the complete RoboCasa/shared asset
+population, and model/provider configuration. It mounts the frozen policy bundle
+read-only and delegates reset, actions and scoring to the original evaluator via
+`robocasa_episode.py`. It writes the execution binding only after a completed
+native receipt and unchanged input checks.
+
+Asset admission rejects missing, extra, changed or symlinked files inside the
+asset population; the asset root itself may be an intentional storage mount.
+This matters because partial local object libraries change RoboCasa's sampling
+distribution. Entry-point tests also reject changed reset identities or horizons
+before calling the evaluator. These are software checks, not scored robot runs.
+Deployment closure review, a live native worker check and the core evaluator port
+remain required before a scored Self-Harness campaign. Python/package versions
+and the explicit isolation variant still need native qualification.
 
 ## Frozen System 1 inputs
 
