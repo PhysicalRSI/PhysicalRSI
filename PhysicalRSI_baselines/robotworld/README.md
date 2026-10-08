@@ -89,6 +89,15 @@ task is present and hash-verified. Missing resources must never trigger scene,
 object, seed or task substitutions to obtain a passing result. Preserve cached
 downloads and verify them against the release manifest before reuse.
 
+Native probing exposed a stronger prerequisite: RoboCasa derives object
+registry sampling probabilities and split membership from locally present
+object paths. An incomplete object library produced `Probabilities contain
+NaN` during reset. Even a nonempty subset can change the sampled population.
+Therefore scene-first restoration is only deployment staging: restore and
+verify the complete pinned object library before policy evaluation. Do not
+repair this by narrowing registries, inserting placeholders, skipping sampled
+objects, or selecting a seed that happens to use the installed subset.
+
 The native evaluator computes the effective reset seed as
 `launcher_seed + task_index * num_trials + episode_index`, where `task_index`
 comes from the selected upstream task registry. An evaluator port must bind
