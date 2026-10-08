@@ -178,3 +178,21 @@ Fixture tests cover completed-failure replay, result tampering, unresolved launc
 handling and effective reset identities. The native candidate-loading worker,
 admission gates and evaluator port are still required before this primitive can
 support a scored Self-Harness campaign.
+
+## Frozen System 1 inputs
+
+`policy_bundle.edit_contract()` exposes three JSON files to System 2: guidance in
+`prompts.json`, named Python source strings in `skills.json`, and public lessons
+in `memory.json`. `fixed_components(reviewed_seed)` records the trusted baseline's
+remaining files. Store that reference in the deployment; never accept a candidate's
+self-declared reference as admission. `read_bundle` rejects any changes outside
+the editable domain, including task configuration, tools and foundation.
+
+`materialize` copies these inputs into a fresh directory and creates an immutable
+content-addressed memory snapshot through the existing MemoryStore. It parses
+skills without executing them on the host. `isolation.mount_policy` mounts that
+directory read-only at `/policy`; the separate `/workspace` holds episode-local
+notes. Only a new reviewed candidate can promote those notes into initial memory.
+A live namespace diagnostic verified readable policy inputs, rejected writes,
+writable working notes and hidden host project paths. These checks do not yet
+establish complete native candidate execution or task success.
