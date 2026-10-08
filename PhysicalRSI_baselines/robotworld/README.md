@@ -129,3 +129,29 @@ The pinned V8 helper archive returned HTTP 404. The app-server and CLI build
 completed without that helper, using the upstream documented
 `WORLD_CODEX_DISABLE_CODE_MODE=1` direct-tool mode. Keep that change in the
 runtime identity; it does not enable environment-side `code_control`.
+
+## Codex System 2 proposals
+
+`codex_proposals.CodexProposal` supplies the strategy port for core
+`StructuredProposer`. It freezes the worker, deployment, interpreter and transport
+sources, bounds request/response size and elapsed time, and owns worker teardown.
+`codex_proposal_worker.py` uses the verified upstream Codex build and isolated
+relay. Only the structured development request enters the model context; shell,
+apps, plugins, multi-agent and web tools are disabled for this proposal call.
+The worker returns untrusted JSON, not an admitted candidate or a success score.
+Core enforces editable-file schemas, unchanged foundation, frozen parent hashes,
+paired evaluation and durable selection. A timeout remains an unresolved call;
+it is not silently retried as an empty proposal.
+
+A deployment descriptor pins upstream Python sources, the source-build manifest,
+bubblewrap binary, model/provider and reasoning effort, plus local paths for the
+upstream tree, credential home and temporary storage. Keep credentials out of this
+descriptor. The transport's scratch directory is separate from round evidence.
+The caller must review the worker/deployment closure; a hash identifies inputs
+but does not independently certify their isolation or completeness.
+
+The initial live integration check used the existing software counter suite with
+real isolated Codex proposals. Its two Self-Harness rounds produced `inherited`
+then `retained`, with complete proposal receipts and lineage. This verifies the
+software wiring only: it is neither a RoboCasa rollout nor benchmark improvement.
+Native evaluator ports, frozen task candidates and native selection remain pending.
