@@ -84,9 +84,15 @@ def main():
 
     isolated_codex.sandbox_command = sandbox
     with isolated_codex.IsolatedCodex(deployment['build_manifest'], args.output, home) as relay:
-        env = os.environ.copy()
+        # Do not let ambient WORLD_* settings select another backend, model
+        # catalog or observation channel. The worker owns these values below;
+        # ordinary runtime variables (including the explicitly propagated proxy)
+        # remain available to the pinned simulator environment.
+        env = {name: value for name, value in os.environ.items()
+               if not name.startswith('WORLD_')}
         env.update(PYTHONDONTWRITEBYTECODE='1', PYTHONPATH=os.pathsep.join(deployment['native_pythonpath']),
                    MUJOCO_GL='egl', PYOPENGL_PLATFORM='egl', NUMBA_CACHE_DIR=deployment['numba_cache'],
+                   WORLD_AGENT_BACKEND='bubblewrap', WORLD_CODEX_DISABLE_CODE_MODE='1',
                    WORLD_CODEX_SOCKET=str(relay.socket_path), WORLD_AGENT_OBSERVATIONS=str(relay.observations))
         # Inherit the runner's process group: its bounded teardown owns simulator descendants.
         command = [deployment['native_python'], str(episode), '--request', str(args.request),
