@@ -43,9 +43,10 @@ See [configuration and cycle behavior](../docs/demo-workbench.md). Model weights
 ## Research in progress
 
 [Dexterous manipulation with GPT-as-Policy and PhysicalRSI Core](dexterous_manipulation/README.md)
-describes a proposed learning loop for camera handling and peg insertion, with
-future Tianji/BrainCo hardware transfer. This is a documentation-only research
-entry; successful task execution and a runnable demo are not included.
+shares the in-progress experiment code and learning-loop design for camera
+handling and peg insertion, with future Tianji/BrainCo hardware transfer.
+Completed comparisons have no task successes; the research record documents
+the failed left-hand pickup and the remaining simulation and hardware work.
 
 ## CPU examples
 

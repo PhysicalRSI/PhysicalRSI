@@ -11,6 +11,7 @@ dependencies = ["rich>=13,<15", "prompt-toolkit>=3,<4", "jsonschema>=4.23,<5"]
 
 [project.scripts]
 physicalrsi = "PhysicalRSI.cli:main"
+physicalrsi-dexterous-loop = "PhysicalRSI_demos.dexterous_manipulation.dexjoco_loop:main"
 
 [project.optional-dependencies]
 runtime = ["numpy>=1.26,<3"]
@@ -18,16 +19,19 @@ robodojo = ["numpy>=1.26,<3", "shapely>=2,<3", "pyyaml>=6,<7", "Pillow>=10,<13"]
 mcp = ["mcp>=1.23,<2"]
 dataset = ["numpy>=1.26,<3", "lerobot>=0.3.3,<0.4"]
 dexjoco = ["numpy>=1.26,<3", "Pillow>=10,<13", "zarr>=2.18,<3", "numcodecs>=0.12,<0.16"]
+dexterous = ["numpy>=1.26,<3", "scipy>=1.11,<2", "Pillow>=10,<13", "PyYAML>=6,<7", "msgpack>=1,<2", "imageio>=2,<3"]
+dexterous-sim = ["mujoco==3.4.0", "imageio-ffmpeg>=0.6,<1"]
 test = ["pytest>=8,<10", "numpy>=1.26,<3", "Pillow>=10,<12", "scipy>=1.11,<2"]
 
 [tool.setuptools.packages.find]
 include = ["PhysicalRSI*", "examples*"]
-exclude = ["PhysicalRSI_baselines.robodojo.XPolicyLab*", "PhysicalRSI_baselines.robodojo.releases*"]
+exclude = ["PhysicalRSI_baselines.robodojo.XPolicyLab*", "PhysicalRSI_baselines.robodojo.releases*", "PhysicalRSI_demos.dexterous_manipulation.tests*"]
 
 [tool.setuptools.package-data]
 "PhysicalRSI_Autoresearch" = ["*.md", "*.json"]
 "PhysicalRSI_baselines.opentrons_liquid_handling" = ["README.md"]
 "PhysicalRSI.cli" = ["assets/*"]
+"PhysicalRSI_demos.dexterous_manipulation" = ["README.md", "provenance.json", "docs/*.md", "patches/*", "skills/**/*.md"]
 "PhysicalRSI_demos.showcase" = ["web/*"]
 "PhysicalRSI_demos.auto_engineering" = ["README.md", "TODO.md", "requirements-isaac.txt"]
 "PhysicalRSI_demos" = ["media/*", "piano_skill_library/**/*.json", "piano_skill_library/**/*.md", "piano_skill_library/*.md", "piano_skill_library/*.json"]
