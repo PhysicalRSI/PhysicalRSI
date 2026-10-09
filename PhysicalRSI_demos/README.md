@@ -40,6 +40,13 @@ The live workflow implements `click_mouse`. The agent requests a bounded layout 
 
 See [configuration and cycle behavior](../docs/demo-workbench.md). Model weights, the simulator and generated datasets remain external. Video playback works without them.
 
+## Research in progress
+
+[Dexterous manipulation with GPT-as-Policy and PhysicalRSI Core](dexterous_manipulation/README.md)
+describes a proposed learning loop for camera handling and peg insertion, with
+future Tianji/BrainCo hardware transfer. This is a documentation-only research
+entry; successful task execution and a runnable demo are not included.
+
 ## CPU examples
 
 ```text
