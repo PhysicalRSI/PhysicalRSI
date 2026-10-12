@@ -58,3 +58,10 @@ Use a fresh workspace for `/evolve` to run the complete Self-Harness service exa
 
 
 The [auto-engineering lab](auto_engineering/README.md) adds a self-built Isaac Sim sample-transfer scene and a native Self-Harness repair demonstration. Run it with `./physicalrsi auto-engineering --help`; it requires a separately installed Isaac Sim environment.
+
+## Physical L1/L2/L3 method
+
+The [real-robot method](real_robot/README.md) contains our reusable code-policy
+execution, direct-tool rescue, language/video/teleoperation assistance, and
+independent Self-Harness learning loop. Hardware deployment is external.
+Its offline tests verify software behavior, not physical task success.

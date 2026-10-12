@@ -13,6 +13,7 @@ dependencies = ["rich>=13,<15", "prompt-toolkit>=3,<4", "jsonschema>=4.23,<5"]
 physicalrsi = "PhysicalRSI.cli:main"
 
 [project.optional-dependencies]
+real-robot = ["numpy>=1.26,<3", "scipy>=1.11,<2", "Pillow>=10,<13", "h5py>=3.8,<4", "av>=12,<17"]
 runtime = ["numpy>=1.26,<3"]
 robodojo = ["numpy>=1.26,<3", "shapely>=2,<3", "pyyaml>=6,<7", "Pillow>=10,<13"]
 mcp = ["mcp>=1.23,<2"]
@@ -25,6 +26,7 @@ include = ["PhysicalRSI*", "examples*"]
 exclude = ["PhysicalRSI_baselines.robodojo.XPolicyLab*", "PhysicalRSI_baselines.robodojo.releases*"]
 
 [tool.setuptools.package-data]
+"PhysicalRSI_demos.real_robot" = ["README.md", "provenance.json"]
 "PhysicalRSI_Autoresearch" = ["*.md", "*.json"]
 "PhysicalRSI_baselines.opentrons_liquid_handling" = ["README.md"]
 "PhysicalRSI.cli" = ["assets/*"]

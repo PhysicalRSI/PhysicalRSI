@@ -107,6 +107,10 @@ The full fork is pinned at `393f730` under `PhysicalRSI_baselines/robodojo/XPoli
 
 [Baseline setup and provenance →](PhysicalRSI_baselines/README.md)
 
+[Physical L1/L2/L3 method →](PhysicalRSI_demos/real_robot/README.md):
+isolated code policies, direct-tool rescue, language/video/teleoperation assistance,
+and independent L1-only Self-Harness comparison. Robot SDKs and deployment are external.
+
 ## Demos
 
 ### Auto-engineering lab
