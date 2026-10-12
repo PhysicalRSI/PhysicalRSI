@@ -80,6 +80,17 @@ def validate_profile(profile):
             raise ValueError("Invalid native score range")
         if not 0 <= _number(spec["maximum_regression"]) <= 1:
             raise ValueError("Invalid normalized regression limit")
+        for key in ("minimum_success_rate", "maximum_success_regression"):
+            if key in spec and not 0 <= _number(spec[key]) <= 1:
+                raise ValueError("Invalid success constraint")
+        cost_limits = spec.get("cost_limits", {})
+        if not isinstance(cost_limits, dict):
+            raise ValueError("Cost limits must map measurement names to bounds")
+        for measurement, limit in cost_limits.items():
+            identifier(measurement)
+            if _number(limit) < 0:
+                raise ValueError("Cost limits must be nonnegative")
+    _number(sum(spec["weight"] for spec in tasks.values()))
     if not 0 <= _number(profile["minimum_gain"]) <= 1:
         raise ValueError("Invalid normalized improvement margin")
     if not 0 <= _number(profile["tie_tolerance"]) < 1:
@@ -88,6 +99,13 @@ def validate_profile(profile):
         raise ValueError(
             "Optional cost/qualification policies are not admitted in the minimal core"
         )
+    if "statistics" in profile:
+        rule = profile["statistics"]
+        if (not isinstance(rule, dict) or set(rule) != {"method", "alpha", "max_comparisons"}
+                or rule["method"] != "paired-hoeffding"
+                or not 0 < _number(rule["alpha"]) < 1
+                or type(rule["max_comparisons"]) is not int or rule["max_comparisons"] < 1):
+            raise ValueError("Declare paired-hoeffding alpha and a bounded comparison budget")
 
 
 def validate_admission_binding(
@@ -203,6 +221,7 @@ def select_survivor(
             raise ValueError("Paired experiment execution or scoring protocols differ")
     root = Path(evidence_root).resolve()
     metrics = {}
+    paired_scores = {}
     revisions = set()
     for result in results:
         name = result["candidate_id"]
@@ -230,6 +249,8 @@ def select_survivor(
         used = set()
         scores = {task: [] for task in tasks}
         success = {task: [] for task in tasks}
+        costs = {task: {key: [] for key in spec.get("cost_limits", {})} for task, spec in tasks.items()}
+        paired_scores[name] = {}
         for row in rows:
             pair = (row["task"], row["layout_sha256"])
             if pair not in expected or pair in used:
@@ -255,7 +276,13 @@ def select_survivor(
                         "Native evidence missing, changed or outside the evidence root"
                     )
             scores[pair[0]].append((score - low) / (high - low))
+            paired_scores[name][pair] = (score - low) / (high - low)
             success[pair[0]].append(row["success"])
+            for key, values in costs[pair[0]].items():
+                value = _number(row.get("measurements", {}).get(key))
+                if value < 0:
+                    raise ValueError("Measured cost must be nonnegative")
+                values.append(value)
         per_task = {task: sum(values) / len(values) for task, values in scores.items()}
         total_weight = sum(spec["weight"] for spec in tasks.values())
         metrics[name] = dict(
@@ -264,6 +291,9 @@ def select_survivor(
             per_task=per_task,
             success_rate={t: sum(v) / len(v) for t, v in success.items()},
         )
+        if any(costs.values()):
+            metrics[name]["mean_cost"] = {task: {key: sum(values) / len(values)
+                                               for key, values in items.items()} for task, items in costs.items()}
     if len(revisions) != 1:
         raise ValueError("Mixed evaluator revisions")
     parent = comparison["parent_id"]
@@ -271,7 +301,17 @@ def select_survivor(
     profile = comparison["profile"]
     eligible = []
     rejection = {}
-    cost_rule = profile.get("cost_reduction")
+    statistics = profile.get("statistics")
+    radius = None
+    if statistics:
+        if len(pool) - 1 > statistics["max_comparisons"]:
+            raise ValueError("Candidate pool exceeds statistical comparison budget")
+        # Independent paired case differences lie in [-1, 1]. Weighted
+        # Hoeffding plus a union bound covers the preregistered total number of
+        # candidate comparisons, including adaptive rounds with fresh cases.
+        variance_bound = sum((spec["weight"] / total_weight) ** 2 / spec["episodes"]
+                             for spec in tasks.values())
+        radius = math.sqrt(2 * math.log(statistics["max_comparisons"] / statistics["alpha"]) * variance_bound)
     for name, metric in metrics.items():
         if name == parent:
             continue
@@ -282,61 +322,36 @@ def select_survivor(
             > tasks[t]["maximum_regression"] + profile["tie_tolerance"]
         ]
         gain = metric["normalized_score"] - parent_metrics["normalized_score"]
-        if metric.get("capability_qualification", {}).get("state") == "not_qualified":
-            rejection[name] = dict(
-                reason="capability_not_qualified",
-                qualification=metric["capability_qualification"],
-            )
-        elif regressed:
+        success_regressed = [t for t, spec in tasks.items()
+            if (metric["success_rate"][t] + profile["tie_tolerance"] < spec.get("minimum_success_rate", 0)
+                or parent_metrics["success_rate"][t] - metric["success_rate"][t]
+                > spec.get("maximum_success_regression", 1) + profile["tie_tolerance"])]
+        over_cost = [t + ":" + key for t, spec in tasks.items()
+                     for key, limit in spec.get("cost_limits", {}).items()
+                     if metric["mean_cost"][t][key] > limit]
+        if statistics:
+            differences = [paired_scores[name][pair] - paired_scores[parent][pair] for pair in sorted(expected)]
+            metric["improvement_evidence"] = dict(
+                method=statistics["method"], normalized_gain=gain, lower_bound=gain-radius,
+                alpha_per_comparison=statistics["alpha"] / statistics["max_comparisons"],
+                paired_wins=sum(d > 0 for d in differences), paired_losses=sum(d < 0 for d in differences),
+                paired_ties=sum(d == 0 for d in differences), independent_cases_required=True)
+        if regressed:
             rejection[name] = dict(reason="task_regression", tasks=regressed)
-        elif cost_rule is not None:
-            success_regressed = [
-                t
-                for t in tasks
-                if parent_metrics["success_rate"][t] - metric["success_rate"][t]
-                > cost_rule.get("maximum_success_regression", 0)
-                + profile["tie_tolerance"]
-            ]
-            before = parent_metrics["selection_cost"]["value"]
-            after = metric["selection_cost"]["value"]
-            if success_regressed:
-                rejection[name] = dict(
-                    reason="success_regression", tasks=success_regressed
-                )
-            elif gain + profile["tie_tolerance"] < profile["minimum_gain"]:
-                rejection[name] = dict(
-                    reason="insufficient_quality", normalized_gain=gain
-                )
-            elif before is None or after is None:
-                rejection[name] = dict(reason="unknown_cost")
-            elif (
-                before == 0
-                or (before - after) / before
-                <= cost_rule["minimum_relative_reduction"] + profile["tie_tolerance"]
-            ):
-                rejection[name] = dict(
-                    reason="no_sufficient_cost_reduction",
-                    relative_reduction=(before - after) / before if before else None,
-                )
-            else:
-                eligible.append(name)
+        elif success_regressed:
+            rejection[name] = dict(reason="success_constraint", tasks=success_regressed)
+        elif over_cost:
+            rejection[name] = dict(reason="cost_constraint", measurements=over_cost)
         elif gain <= profile["minimum_gain"] + profile["tie_tolerance"]:
             rejection[name] = dict(
                 reason="no_sufficient_improvement", normalized_gain=gain
             )
+        elif statistics and gain - radius <= profile["minimum_gain"] + profile["tie_tolerance"]:
+            rejection[name] = dict(reason="insufficient_evidence", lower_bound=gain-radius, normalized_gain=gain)
         else:
             eligible.append(name)
     winner = parent
     if eligible:
-        if cost_rule is not None:
-            # Costs here are integer calls/tokens. Prefer quality among equal
-            # costs, then use the same deterministic candidate identity tie.
-            best_cost = min(metrics[n]["selection_cost"]["value"] for n in eligible)
-            eligible = [
-                n
-                for n in eligible
-                if metrics[n]["selection_cost"]["value"] == best_cost
-            ]
         best = max(metrics[n]["normalized_score"] for n in eligible)
         winner = min(
             n

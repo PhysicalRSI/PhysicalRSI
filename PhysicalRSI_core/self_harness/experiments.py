@@ -94,7 +94,8 @@ def experiment_result(runtime, run_ids, *, candidate_id, comparison, cohort,
             evidence[str(path.relative_to(root))] = sha
         used.add(pair)
         rows.append(dict(task=pair[0], layout_sha256=pair[1], state="completed",
-                         score=score, success=success, evidence_sha256=evidence))
+                         score=score, success=success, evidence_sha256=evidence,
+                         measurements=receipt["verdict"]["measurements"]))
         # Policies may differ; execution conditions and independent scoring must
         # agree for each paired case across the whole candidate pool.
         protocols.append(dict(

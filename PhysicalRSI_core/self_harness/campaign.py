@@ -43,6 +43,9 @@ class ImprovementCampaign:
 
     def _run(self, initial):
         first = self.build_loop(self._directory(0))
+        statistics = first.config["profile"].get("statistics")
+        if statistics and self.max_rounds * first.config["max_candidates"] > statistics["max_comparisons"]:
+            raise ValueError("Campaign exceeds preregistered statistical comparison budget")
         config = dict(schema="physicalrsi.campaign/v1", max_rounds=self.max_rounds,
                       initial_sha256=verify_harness(initial), state_root=str(self.state.root),
                       policy=first.config, implementation=file_digest(Path(__file__)))

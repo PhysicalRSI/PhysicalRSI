@@ -146,6 +146,9 @@ class ShadowGate:
         return dict(kind="shadow-admission/v1", parent_sha256=self.parent_sha256,
                     reports=dict(self._reports), implementation=file_digest(Path(__file__)))
 
+    def policy_identity(self):
+        return dict(kind="shadow-admission-policy/v1", implementation=file_digest(Path(__file__)))
+
     def check(self, candidate):
         self.identity()
         sha = verify_harness(candidate)
@@ -157,12 +160,14 @@ class ShadowGate:
             if report.get("candidate_sha256") == sha:
                 matched.append((name, report))
         if len(matched) != 1:
-            return dict(accepted=False, reason="Exactly one bound shadow report is required")
+            return dict(accepted=False, reason="Exactly one bound shadow report is required",
+                        evidence=dict(candidate_sha256=sha, reports=dict(self._reports)))
         name, report = matched[0]
         if (report.get("schema") != "physicalrsi.shadow-replay/v1"
                 or report.get("parent_sha256") != self.parent_sha256
                 or report.get("conclusive") is not True or report.get("passed") is not True):
-            return dict(accepted=False, reason="Shadow replay is inconclusive or rejected")
+            return dict(accepted=False, reason="Shadow replay is inconclusive or rejected",
+                        evidence=dict(shadow_report=name, shadow_report_sha256=self._reports[name]))
         for source, expected in report["sources"].items():
             if file_digest(Path(source)) != expected:
                 raise ValueError("Shadow source evidence changed")

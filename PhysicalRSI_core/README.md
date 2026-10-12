@@ -47,6 +47,17 @@ python -m pytest -q tests/test_improvement_campaign.py tests/test_autoresearch_r
 
 These checks exercise software integration, restart and evidence integrity. They do not establish native benchmark gains or physical qualification.
 
+`self_harness.research_campaign.ResearchCampaign` adds an opt-in recursive
+research workflow: each round consumes a pinned research memory, proposes and
+evaluates candidates, then creates a development-evidence-bound memory delta.
+A durable round receipt advances the harness and memory references together for
+the next proposal, including rounds that retain the parent. Stable campaign
+rules are separated from fresh case plans and memory bindings. Profiles can
+declare success/cost constraints and conservative paired statistical selection.
+Final held-out tests are report-only. See [recursive research](../docs/recursive-research.md)
+for provider contracts, recovery boundaries, a two-task CPU example and its
+frozen-memory control.
+
 ## Other modules
 
 - `contracts.py`: typed, versioned operations and cooperative execution context.

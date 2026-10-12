@@ -20,6 +20,7 @@ from PhysicalRSI_core.infra.storage import (
 
 from .artifacts import verify_harness
 from .selection import validate_profile
+from .bindings import policy_identity, validate_admission, validate_round_context
 
 
 def now():
@@ -54,10 +55,15 @@ class SelfHarness:
         protocol,
         scope,
         max_candidates=3,
+        round_context=None,
     ):
         if type(max_candidates) is not int or not 1 <= max_candidates <= 32:
             raise ValueError("Bounded candidate budget required")
         validate_profile(profile)
+        if round_context is not None:
+            validate_round_context(round_context)
+            if not callable(getattr(proposer, "propose_with_context", None)) or not callable(getattr(evaluator, "register_round", None)):
+                raise ValueError("Research rounds require context-aware proposal and split registration ports")
         self.root = Path(root).resolve()
         self.state, self.proposer, self.evaluator, self.selector = (
             state,
@@ -72,6 +78,12 @@ class SelfHarness:
             max_candidates=max_candidates,
             identities=self.identities(),
         )
+        self.round_context = deepcopy(round_context)
+        self.policy = deepcopy(self.config)
+        if round_context is not None:
+            self.policy = self._campaign_policy()
+            self.config.update(schema="physicalrsi.self-harness/v2",
+                               campaign_policy=self.policy, round_context=self.round_context)
         with locked(self.root / ".init.lock"):
             path = self.root / "config.json"
             if path.exists() and read_json(path) != self.config:
@@ -88,11 +100,24 @@ class SelfHarness:
             scoring=file_digest(Path(__file__).with_name("selection.py")),
         )
 
+    def _campaign_policy(self):
+        protocol = {key: value for key, value in self.config["protocol"].items() if key != "identity"}
+        identities = self.identities()
+        identities.update(proposer=policy_identity(self.proposer), evaluator=policy_identity(self.evaluator),
+                          selector=policy_identity(self.selector),
+                          bindings=file_digest(Path(__file__).with_name("bindings.py")),
+                          lineage=file_digest(Path(__file__).parent.parent / "lineage" / "__init__.py"))
+        return dict(schema="physicalrsi.campaign-policy/v2", profile=deepcopy(self.config["profile"]),
+                    protocol=deepcopy(protocol), scope=self.config["scope"],
+                    max_candidates=self.config["max_candidates"], identities=identities)
+
     def _stable(self):
         if read_json(self.root / "config.json") != self.config:
             raise ValueError("Frozen experiment configuration changed")
         if self.identities() != self.config["identities"]:
             raise ValueError("Executable port or core identity changed")
+        if self.round_context is not None and self._campaign_policy() != self.policy:
+            raise ValueError("Campaign policy changed")
 
     def _step(self, name, inputs, call, *, recover=None):
         # Adapted from v1 RSI._step: completed work resumes, unknown work blocks.
@@ -154,9 +179,13 @@ class SelfHarness:
         else:
             anchor = self.state.resolve()
             atomic_json(anchor_path, anchor)
-        if anchor["policy"] != self.config or anchor["scope"] != self.config["scope"]:
+        if anchor["policy"] != self.policy or anchor["scope"] != self.config["scope"]:
             raise ValueError("Committed state and experiment policy differ")
         parent = anchor["harness"]
+        if self.round_context is not None:
+            if self.round_context["parent_revision"] != anchor["revision"]:
+                raise ValueError("Round context belongs to another parent")
+            self.evaluator.register_round(self.state, digest(self.config), context=deepcopy(self.round_context))
         parent_sha = verify_harness(parent)
         if parent_sha != anchor["freeze_sha256"]:
             raise ValueError("Parent changed")
@@ -176,13 +205,19 @@ class SelfHarness:
         )
         if feedback.get("split") != "evolve" or not feedback.get("evidence"):
             raise ValueError("Development evidence, including failures, required")
+        proposal_inputs = dict(parent=parent_sha, feedback=feedback)
+        if self.round_context is not None:
+            proposal_inputs["research_context"] = self.round_context
         children = self._step(
             "propose",
-            dict(parent=parent_sha, feedback=feedback),
-            lambda: self.proposer.propose(
-                deepcopy(parent), deepcopy(feedback), self.root
-            ),
-            recover=self._recovery(self.proposer, "resume_proposal", parent, feedback),
+            proposal_inputs,
+            (lambda: self.proposer.propose_with_context(
+                deepcopy(parent), deepcopy(feedback), deepcopy(self.round_context), self.root
+            )) if self.round_context is not None else (lambda: self.proposer.propose(
+                deepcopy(parent), deepcopy(feedback), self.root)),
+            recover=(self._recovery(self.proposer, "resume_proposal_with_context", parent, feedback,
+                                    self.round_context) if self.round_context is not None else
+                     self._recovery(self.proposer, "resume_proposal", parent, feedback)),
         )
         if (
             not isinstance(children, list)
@@ -207,6 +242,18 @@ class SelfHarness:
         if hashes[parent["id"]] != parent_sha:
             raise ValueError("Parent edited during proposal")
         for child in children:
+            if self.round_context is not None:
+                used = child.get("used_lessons")
+                if (not isinstance(used, list) or any(not isinstance(x, str) for x in used)
+                        or len(set(used)) != len(used)
+                        or not set(used) <= set(self.round_context["lessons"])
+                        or any(not child.get(key) for key in ("hypothesis", "expected_effect", "required_checks"))):
+                    raise ValueError("Research proposal needs scoped lessons, hypothesis, effect and checks")
+                if (any(not isinstance(child[key], str) or not child[key].strip()
+                        for key in ("hypothesis", "expected_effect"))
+                        or not isinstance(child["required_checks"], list)
+                        or any(not isinstance(check, str) or not check for check in child["required_checks"])):
+                    raise ValueError("Research proposal hypotheses and check names must be explicit")
             if child["components"]["foundation"] != parent["components"]["foundation"]:
                 raise ValueError("Foundation F must stay fixed")
             if child.get("parent_sha256") != parent_sha or not all(
@@ -223,12 +270,7 @@ class SelfHarness:
                 hashes[h["id"]],
                 lambda h=h: self.evaluator.admit(deepcopy(h), self.root),
             )
-            if receipt.get("freeze_sha256") != hashes[h["id"]] or not receipt.get(
-                "evidence"
-            ):
-                raise ValueError("Admission is not bound to candidate evidence")
-            if type(receipt.get("accepted")) is not bool:
-                raise ValueError("Admission must complete explicitly")
+            validate_admission(receipt, hashes[h["id"]])
             if receipt["accepted"]:
                 accepted.append(h)
             else:
@@ -268,6 +310,8 @@ class SelfHarness:
                 protocol_sha256=digest(self.config["protocol"]),
                 scope=self.config["scope"],
                 evaluation_kind=self.config["protocol"]["evaluation_kind"],
+                **(dict(round_config_sha256=digest(self.config),
+                        round_index=self.round_context["index"]) if self.round_context is not None else {}),
             ),
         )
         cohort = self._step(

@@ -73,6 +73,18 @@ class ExperimentEvaluator:
         if self.identity() != self._identity:
             raise ValueError("Experiment evaluator identity changed")
 
+    def policy_identity(self):
+        from .bindings import policy_identity
+        value = self.identity()
+        value["suite"] = policy_identity(self.suite)
+        return value
+
+    def register_round(self, state, round_identity, *, context=None):
+        method = getattr(self.suite, "register_round", None)
+        if not callable(method):
+            raise ValueError("Research evaluation requires preregistered split registration")
+        return method(state, round_identity, context=context)
+
     def admit(self, candidate, output):
         self._stable()
         sha = verify_harness(candidate)
@@ -201,12 +213,18 @@ class ExperimentEvaluator:
             plan = self._plan(parent["id"], sha, self._cases(cases), split="development")
             freeze_json(path, plan)
             self._reserve([(directory, plan)])
-            _, receipts = self._run_plan(parent, directory, plan)
+            runtime, receipts = self._run_plan(parent, directory, plan)
             rows = [dict(task=row["task"], case=row["case"], run_id=row["run_id"],
                          outcome=receipt["outcome"], measurements=receipt["verdict"]["measurements"])
                     for row, receipt in zip(plan["trials"], receipts)]
             evidence = {str(p.relative_to(output)): file_digest(p)
                         for p in directory.rglob("*.json")}
+            for row, receipt in zip(plan["trials"], receipts):
+                for name, expected in receipt["evidence"].items():
+                    path = runtime.root / row["run_id"] / relative_path(name)
+                    if file_digest(path) != expected:
+                        raise ValueError("Development evidence changed")
+                    evidence[str(path.relative_to(output))] = expected
             return dict(split="evolve", evaluator_revision=self.revision, episodes=rows,
                         evidence=evidence, costs=dict(reserved_trials=len(rows)))
 
@@ -297,3 +315,41 @@ class ExperimentEvaluator:
     def resume_evaluation(self, candidate, comparison, cohort, output):
         """Verify finished trials, block unknown trials, then run missing trials."""
         return self.evaluate(candidate, comparison, cohort, output)
+
+    def report_test(self, candidate, *, selection_sha256, output):
+        """Report a single final candidate on preregistered held-out cases.
+
+        This never calls the selector or updates memory. Native uncertain/invalid
+        outcomes remain visible; all planned cases stay in the denominator.
+        The caller owns the final-selection claim and a single report workspace.
+        """
+        output = self._output(output)
+        self._stable()
+        sha = verify_harness(candidate)
+        with locked(output / ".report.lock"):
+            cases = self._cases(self.suite.claim_test(candidate_sha256=sha,
+                selection_sha256=selection_sha256, claim_root=output / "claim"))
+            comparison = dict(candidate_sha256=sha, selection_sha256=selection_sha256)
+            cohort = dict(split="test", cases=cases)
+            directory = self._directory(output, "test", candidate["id"])
+            plan = self._plan(candidate["id"], sha, cases, split="test", comparison=comparison, cohort=cohort)
+            freeze_json(directory / "plan.json", plan)
+            self._reserve([(directory, plan)])
+            _, receipts = self._run_plan(candidate, directory, plan)
+            rows = [dict(task=row["task"], run_id=row["run_id"], case_sha256=digest(row["case"]),
+                         outcome=receipt["outcome"], measurements=receipt["verdict"]["measurements"])
+                    for row, receipt in zip(plan["trials"], receipts)]
+            metrics = {}
+            for task, values in cases.items():
+                outcomes = [row["outcome"] for row in rows if row["task"] == task]
+                metrics[task] = dict(planned=len(values), successes=outcomes.count("success"),
+                    failures=outcomes.count("failure"), uncertain=outcomes.count("uncertain"),
+                    invalid=outcomes.count("invalid"), success_rate=outcomes.count("success") / len(values))
+            report = dict(schema="physicalrsi.final-test/v1", candidate_sha256=sha,
+                          selection_sha256=selection_sha256, evaluator_revision=self.revision,
+                          episodes=rows, metrics=metrics, scope=self.scope, qualification=None,
+                          evidence={str(p.relative_to(output)): file_digest(p)
+                                    for p in output.rglob("*") if p.is_file()
+                                    and p.name != "report.json" and p.suffix != ".lock"})
+            freeze_json(output / "report.json", report)
+            return report

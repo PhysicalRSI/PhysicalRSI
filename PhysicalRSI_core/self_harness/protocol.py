@@ -78,7 +78,22 @@ class CaseProtocol:
             raise ValueError("Test cases require a frozen final-candidate claim")
         return deepcopy(self._manifest["splits"][split])
 
-    def claim_test(self, *, candidate_sha256, selection_sha256):
+    def policy_identity(self):
+        self.identity()
+        return dict(kind="case-protocol-policy/v1", identity_keys=self._manifest["identity_keys"],
+                    tasks=sorted(self._manifest["splits"]["development"]), test_role="report_only",
+                    final_test_sha256=digest(self._manifest["splits"]["test"]),
+                    implementation=file_digest(Path(__file__)))
+
+    def reset_identities(self):
+        """Public identity digests only, for cross-round split registration."""
+        self.identity()
+        keys = self._manifest["identity_keys"]
+        return {split: [digest([task, {key: case[key] for key in keys}])
+                        for task, cases in tasks.items() for case in cases]
+                for split, tasks in self._manifest["splits"].items()}
+
+    def claim_test(self, *, candidate_sha256, selection_sha256, claim_root=None):
         """Bind report-only test access to one final selection, resumably.
 
         The caller verifies the actual selection and executes test trials.
@@ -89,9 +104,12 @@ class CaseProtocol:
         claim = dict(protocol_sha256=self.revision,
                      candidate_sha256=_sha(candidate_sha256),
                      selection_sha256=_sha(selection_sha256))
-        with locked(self.root / ".lock"):
+        # A campaign places mutable report claims outside archived round files.
+        # The caller must pin one claim store for the final report lifecycle.
+        store = self.root if claim_root is None else Path(claim_root)
+        with locked(store / ".lock"):
             self.identity()
-            path = self.root / "test-claim.json"
+            path = store / "test-claim.json"
             if path.exists():
                 if read_json(path) != claim:
                     raise ValueError("Test set already bound to another final selection")
@@ -131,6 +149,18 @@ class PreregisteredSuite:
 
     def development_cases(self, parent):
         return self.protocol.cases("development")
+
+    def policy_identity(self):
+        from .bindings import policy_identity
+        return dict(kind="preregistered-suite-policy/v1", suite=policy_identity(self.suite),
+                    protocol=self.protocol.policy_identity(),
+                    shadow_gate=policy_identity(self.shadow_gate) if self.shadow_gate else None)
+
+    def register_round(self, state, round_identity, *, context=None):
+        state.reserve_splits(round_identity, self.protocol.reset_identities())
+
+    def claim_test(self, **kwargs):
+        return self.protocol.claim_test(**kwargs)
 
     def validation_cases(self, comparison):
         return self.protocol.claim_validation(comparison)

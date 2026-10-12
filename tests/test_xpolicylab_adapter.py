@@ -26,6 +26,7 @@ def test_adapter_installs_into_an_upstream_checkout(tmp_path):
     assert required <= {path.name for path in destination.iterdir()}
     assert (destination / 'download_assets.py').is_file()
     assert not (destination / 'assets.json').exists()
+    assert not (destination / 'runtime/PhysicalRSI_baselines/robodojo/XPolicyLab').exists()
     import re
     obsolete = re.compile('route|router|routing', re.IGNORECASE)
     for path in destination.rglob('*'):

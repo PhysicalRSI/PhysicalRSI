@@ -1,6 +1,7 @@
 """Install a portable adapter with skill implementations and asset download metadata."""
 
 import argparse
+import os
 import shutil
 from importlib.resources import files
 from pathlib import Path
@@ -47,10 +48,17 @@ def install(checkout, *, native_client=False):
         repository = Path(__file__).resolve().parents[2]
         for package in ("PhysicalRSI", "PhysicalRSI_core", "PhysicalRSI_baselines"):
             source_root = repository / package
-            for incoming in source_root.rglob("*"):
+            # External provider checkouts are not the portable physicalRSI
+            # runtime. Prune them before traversal, matching package exclusions.
+            excluded = {"releases", "XPolicyLab", "__pycache__", ".pytest_cache", ".git", ".venv"}
+            def source_files():
+                for directory, subdirectories, names in os.walk(source_root):
+                    subdirectories[:] = [name for name in subdirectories if name not in excluded]
+                    for name in names:
+                        yield Path(directory) / name
+
+            for incoming in source_files():
                 relative = incoming.relative_to(source_root)
-                if any(part in {"releases", "__pycache__", ".pytest_cache"} for part in relative.parts):
-                    continue
                 if not incoming.is_file() or incoming.suffix not in {".py", ".json", ".yml", ".yaml"} and not incoming.name.startswith(("LICENSE", "NOTICE")):
                     continue
                 target = destination / "runtime" / package / relative

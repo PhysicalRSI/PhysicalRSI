@@ -85,6 +85,65 @@ class ResearchMemory:
                 if lesson.get("status", "active") == "active"
                 and all(context.get(k) == v for k, v in lesson["conditions"].items())}
 
+    def apply_delta(self, revision, delta, *, allowed_evidence, context):
+        """Apply development-only add/suspend/refine operations in one snapshot.
+
+        Existing lessons and counterexamples cannot be deleted or overwritten.
+        The campaign supplies the verified evidence allowlist, never the reflector.
+        Empty operations explicitly retain the prior memory revision.
+        """
+        if (not isinstance(delta, dict) or delta.get("schema") != "physicalrsi.memory-delta/v1"
+                or set(delta) != {"schema", "operations"} or not isinstance(delta["operations"], list)):
+            raise ValueError("Expected a structured MemoryDelta")
+        lessons = self.read(revision)["lessons"]
+        used = set()
+        for operation in delta["operations"]:
+            name = identifier(operation["lesson_id"])
+            if name in used:
+                raise ValueError("One memory operation per lesson per round")
+            used.add(name)
+            kind = operation["kind"]
+            evidence = operation["lesson"]["evidence"] if kind == "add" else operation["evidence"]
+            _evidence(evidence)
+            if any(allowed_evidence.get(path) != sha for path, sha in evidence.items()):
+                raise ValueError("Memory updates require permitted development evidence")
+            if kind == "add":
+                if name in lessons:
+                    raise ValueError("A new lesson cannot overwrite an existing lesson")
+                lesson = deepcopy(operation["lesson"])
+                if lesson.get("status", "active") != "active" or "counterexamples" in lesson:
+                    raise ValueError("Add a new active hypothesis without fabricated counterexamples")
+                _lesson(lesson)
+                if any(lesson["conditions"].get(k) != v for k, v in context.items()):
+                    raise ValueError("A new lesson cannot broaden the research scope")
+                lessons[name] = lesson
+                continue
+            if kind not in {"counterexample", "refine"} or name not in lessons:
+                raise ValueError("Unknown memory operation or lesson")
+            lesson = lessons[name]
+            if any(context.get(k) != v for k, v in lesson["conditions"].items()):
+                raise ValueError("Memory operation targets a lesson outside research scope")
+            if kind == "counterexample":
+                check = identifier(operation["check"])
+                explanation = operation["explanation"]
+                if not isinstance(explanation, str) or not explanation.strip():
+                    raise ValueError("Explain the counterexample")
+                lesson["status"] = "suspended"
+                lesson.setdefault("counterexamples", []).append(dict(
+                    check=check, explanation=explanation, evidence=deepcopy(evidence)))
+                if check not in lesson["counterexample_checks"]:
+                    lesson["counterexample_checks"].append(check)
+            else:
+                conditions = operation["conditions"]
+                if any(conditions.get(k) != v for k, v in lesson["conditions"].items()):
+                    raise ValueError("Refinement cannot broaden or change existing scope")
+                lesson.update(conditions=deepcopy(conditions), hypothesis=operation["hypothesis"], status="active")
+            for path, sha in evidence.items():
+                if path in lesson["evidence"] and lesson["evidence"][path] != sha:
+                    raise ValueError("Evidence path reused with different content")
+                lesson["evidence"][path] = sha
+        return self.write(lessons, parent=revision) if used else revision
+
     def counterexample(self, revision, lesson_id, *, check, evidence, explanation):
         """Suspend a contradicted recommendation in a new revision.
 
@@ -191,7 +250,12 @@ class ResearchMemoryGate:
                 else:
                     _evidence(check.get("evidence"))
         evidence.update(report=name, report_sha256=self.reports[name], failed_checks=sorted(failed))
-        return dict(accepted=not failed, evidence=evidence)
+        return dict(accepted=not failed, evidence=evidence,
+                    reason="Required memory checks failed" if failed else None)
+
+    def policy_identity(self):
+        return dict(kind="research-memory-gate-policy/v1", context=deepcopy(self.context),
+                    producer=self.producer, implementation=file_digest(Path(__file__)))
 
 
 class MemoryBoundSuite:
@@ -201,6 +265,21 @@ class MemoryBoundSuite:
 
     def identity(self):
         return dict(kind="memory-bound-suite/v1", suite=self.suite.identity(), memory=self.gate.identity())
+
+    def policy_identity(self):
+        from .bindings import policy_identity
+        return dict(kind="memory-bound-suite-policy/v1", suite=policy_identity(self.suite),
+                    memory=self.gate.policy_identity())
+
+    def register_round(self, state, round_identity, *, context=None):
+        if context is not None:
+            if (self.gate.revision != context["memory_revision"] or self.gate.context != context["scope"]
+                    or self.gate.parent != state.read(context["parent_revision"])["freeze_sha256"]):
+                raise ValueError("Memory gate differs from the proposer research context")
+        return self.suite.register_round(state, round_identity, context=context)
+
+    def claim_test(self, **kwargs):
+        return self.suite.claim_test(**kwargs)
 
     def admit(self, candidate):
         memory = self.gate.check(candidate)

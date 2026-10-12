@@ -104,7 +104,11 @@ class HarnessState:
                 raise ValueError(
                     "Commit requires the frozen selector and full comparison"
                 )
-            if selector.identity() != current["policy"]["identities"]["selector"]:
+            from PhysicalRSI_core.self_harness.bindings import policy_identity
+
+            research = current["policy"].get("schema") == "physicalrsi.campaign-policy/v2"
+            selector_identity = policy_identity(selector) if research else selector.identity()
+            if selector_identity != current["policy"]["identities"]["selector"]:
                 raise ValueError("Selection policy changed")
             directory = Path(comparison_root).resolve()
 
@@ -120,10 +124,22 @@ class HarnessState:
                 return receipt["output"]
 
             comparison = completed("freeze")
+            policy = current["policy"]
+            round_protocol = policy["protocol"]
+            if policy.get("schema") == "physicalrsi.campaign-policy/v2":
+                config_path = directory / "config.json"
+                config = read_json(config_path)
+                if (evidence.get(str(config_path)) != file_digest(config_path)
+                        or config.get("campaign_policy") != policy
+                        or comparison.get("round_config_sha256") != digest(config)
+                        or config["identities"]["selector"] != selector.identity()
+                        or config["round_context"]["parent_revision"] != expected):
+                    raise ValueError("Round configuration is not bound to campaign policy and parent")
+                round_protocol = config["protocol"]
             if (
                 comparison["profile"] != current["policy"]["profile"]
                 or comparison["protocol_sha256"]
-                != digest(current["policy"]["protocol"])
+                != digest(round_protocol)
                 or comparison["scope"] != current["scope"]
                 or comparison["candidates"].get(current["harness"]["id"])
                 != current["freeze_sha256"]
@@ -143,7 +159,7 @@ class HarnessState:
                 result = completed("evaluate_" + name)
                 if (
                     result.get("evaluator_revision")
-                    != current["policy"]["protocol"]["identity"]
+                    != round_protocol["identity"]
                 ):
                     raise ValueError("Evaluator protocol changed")
                 results.append(result)
@@ -218,3 +234,33 @@ class HarnessState:
                 raise ValueError("Validation inputs changed")
             values[comparison] = layouts
             atomic_json(path, values)
+
+    def reserve_splits(self, round_identity, splits):
+        """Register semantic reset IDs before development, across all rounds.
+
+        Development may repeat development; test may repeat test. Validation
+        never overlaps another round or another split, including metadata aliases.
+        """
+        if set(splits) != {"development", "validation", "test"}:
+            raise ValueError("Declare all research splits")
+        sets = {key: set(values) for key, values in splits.items()}
+        if any(not values or len(values) != len(splits[key]) for key, values in sets.items()):
+            raise ValueError("Empty or duplicate split identities")
+        if any(sets[a] & sets[b] for a, b in (("development", "validation"), ("development", "test"),
+                                             ("validation", "test"))):
+            raise ValueError("Research splits overlap")
+        with locked(self.root / ".splits.lock"):
+            path = self.root / "splits.json"
+            ledger = read_json(path) if path.exists() else {}
+            if round_identity in ledger and ledger[round_identity] != splits:
+                raise ValueError("Frozen round splits changed")
+            for key, prior in ledger.items():
+                if key == round_identity:
+                    continue
+                for split, values in sets.items():
+                    forbidden = set().union(*(set(v) for name, v in prior.items()
+                                              if split == "validation" or name != split))
+                    if values & forbidden:
+                        raise ValueError("Reset identity reused across research rounds or splits")
+            ledger[round_identity] = deepcopy(splits)
+            atomic_json(path, ledger)
