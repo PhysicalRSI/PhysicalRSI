@@ -22,7 +22,7 @@ from PhysicalRSI_core.self_harness.artifacts import verify_harness
 from .harness import implementation, verify_episode
 from .lab_style import asset_identity
 from .policy import plan
-from .task import TASK, SCOPE, judge, layout
+from .task import TASK, SCOPE, judge, case_layout
 
 
 def contracts():
@@ -90,8 +90,7 @@ class NativeWorker:
             time.sleep(.05)
 
     def reset(self, case, context):
-        if set(case) != {"seed"} or type(case["seed"]) is not int:
-            raise ValueError("Native case requires one integer seed")
+        case_layout(case)
         self.directory = self.root / (context.episode + "-" + context.harness_revision)
         if self.directory.exists():
             raise ReconciliationRequired("Native output already exists; reconcile before retry: " + str(self.directory))
@@ -119,6 +118,8 @@ class NativeWorker:
                    "--runtime-root", str(self.root / "runtime" / "kit")]
         if self.gui:
             command.append("--gui")
+        if 'scenario' in case:
+            command.extend(['--scenario', case['scenario']])
         try:
             with (self.directory / "worker.log").open("x") as log:
                 self.process = subprocess.Popen(command, cwd=Path(__file__).resolve().parents[2],
@@ -185,7 +186,7 @@ class Environment:
     def step(self, action, context):
         self.result, rollout = self.worker.execute(action, context)
         if (self.result["seed"] != self.case["seed"] or self.result["memory"] != action["memory"]
-                or self.result["layout_sha256"] != digest(layout(self.case["seed"]))
+                or self.result["layout_sha256"] != digest(case_layout(self.case))
                 or self.result.get("runtime_version") not in {"5.1.0", "5.1.0.0"}
                 or self.result["scope"] != SCOPE or self.result["qualification"] is not None):
             raise ValueError("Native episode attribution differs from the Trial")
@@ -238,7 +239,7 @@ class Verifier:
         worker = self.environment.worker
         result = verify_episode(worker.output)
         measured = read_json(worker.output / "private-evaluation.json")
-        verdict = judge(layout(case["seed"]), measured)
+        verdict = judge(case_layout(case), measured)
         if not result["controller_completed"]:
             verdict["success"] = False
             verdict["checks"]["controller_completed"] = False

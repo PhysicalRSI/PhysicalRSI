@@ -6,14 +6,29 @@ TASK = 'sample-transfer'
 SCOPE = 'self-built Isaac Sim lab; simulation development, no physical qualification'
 
 
-def layout(seed):
+SCENARIOS = ('standard', 'tall-obstacle')
+
+
+def layout(seed, scenario='standard'):
+    if type(seed) is not int or scenario not in SCENARIOS:
+        raise ValueError('Declare an integer seed and a supported native scenario')
     rng = random.Random(seed)
     x = rng.uniform(.40, .48)
     y = rng.uniform(.19, .23)
-    return dict(seed=seed, tube=[x, -y, .075], receiver=[x, y, .012],
+    spec = dict(seed=seed, tube=[x, -y, .075], receiver=[x, y, .012],
                 obstacle=[x, 0., .09], distractor=[.63, -.23, .06],
                 tube_radius=.018, tube_height=.12, obstacle_radius=.055,
                 obstacle_height=.18, receiver_half_width=.065)
+    if scenario == 'tall-obstacle':
+        spec.update(scenario=scenario, obstacle_height=.28, obstacle=[x, 0., .14])
+    return spec
+
+
+def case_layout(case):
+    if (not isinstance(case, dict) or 'seed' not in case
+            or set(case) - {'seed', 'scenario'}):
+        raise ValueError('Native case requires a seed and optional scenario')
+    return layout(**case)
 
 
 def judge(spec, measured):

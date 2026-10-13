@@ -2262,3 +2262,42 @@ New cases exercise complete multi-task, multi-case Trial panels, ranking
 reversal, unequal repeat counts, fractional boundaries, flat scores and
 subnormal fractions. Evidence and snapshot hashes are retained in
 `/cpfs02/user/yanming/physicalrsi-core-checks/core-lower-tail-001`.
+
+### Explicit native scenario cases
+
+The native adapter accepts `{"seed": 123, "scenario": "tall-obstacle"}` in
+addition to legacy seed-only cases. `standard` preserves the original layout;
+`tall-obstacle` raises the obstruction from 0.18 to 0.28 meters, with its center
+raised to keep its base on the bench. The exported collision cylinder and the
+beaker's visual group use the same declared height. The Trial verifies the
+scenario-specific layout hash, and independent judging uses that same layout.
+A worker returning a standard scene for a tall-obstacle Trial is rejected.
+
+`auto_engineering.empirical.setup` accepts a mixture of integer seeds and
+explicit scenario dictionaries in its preregistered panels, and forwards
+`lower_tail_fraction` to the core evolver. Seeds remain unique across all
+splits, even when scenario names differ, so adding a label cannot disguise
+reuse of a held-out seed. Malformed cases and unsupported scenarios are
+rejected before workspace creation. No simulator ground truth is added to
+the policy observation; the controller continues to use public RGB-D.
+
+The complete software suite passed 923 tests in 173.23 seconds, including
+subprocess scenario forwarding, attribution rejection and a multi-scenario
+campaign using the lower-tail option. Software contract doubles establish
+interface behavior only; native evidence is recorded separately.
+
+`native-scenario-diagnostic-001` preregistered two development-only native
+Trials at seed 2026102300, with fixed memory `(0.544, 0.38)` and sample height
+0.12 meters. Standard and tall-obstacle episodes both passed all seven
+independently recomputed intended-task checks; there were no replacements.
+An offline USD audit confirms collision heights of 0.18 and 0.28 meters and
+visual Z scales of 1.0 and approximately 1.555556. This audit inspects the
+authored obstacle geometry; the standalone reader does not resolve the remote
+Franka reference. The actual native episodes used Isaac's runtime resolver.
+
+The driver completed and released its device lease. Preregistration, source
+hashes, software test output, canonical receipts and `geometry-audit.json`
+are retained under
+`/cpfs02/user/yanming/physicalrsi-core-checks/native-scenario-diagnostic-001`.
+These two fixed-policy Trials validate scenario integration on the declared
+cases, not an adaptive-search gain or broad scenario generalization.

@@ -74,7 +74,7 @@ def run(args):
 
         out=Path(args.output).resolve();out.mkdir(parents=True,exist_ok=False)
         memory=json.loads(Path(args.memory).read_text()) if args.memory else None
-        spec=layout(args.seed)
+        spec=layout(args.seed, getattr(args, 'scenario', 'standard'))
         atomic_json(out/'layout.json',spec)
         world=World(stage_units_in_meters=1.,physics_dt=1/60,rendering_dt=1/60)
         world.scene.add(FixedCuboid('/World/Floor',name='floor',position=np.array([0.,0.,-.87]),
@@ -225,7 +225,9 @@ def run(args):
 
 
 def main():
+    from .task import SCENARIOS
     p=argparse.ArgumentParser();p.add_argument('--seed',type=int,required=True)
+    p.add_argument('--scenario', choices=SCENARIOS, default='standard')
     p.add_argument('--memory');p.add_argument('--output',required=True);p.add_argument('--gui',action='store_true')
     p.add_argument('--bridge',help='Owned Trial IPC directory; wait for a plan after sensor reset')
     p.add_argument('--runtime-root',help='Owned Kit portable data/cache/log directory')

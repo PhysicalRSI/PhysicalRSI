@@ -3,12 +3,14 @@ import subprocess
 import sys
 import time
 import venv
+import pytest
 
 from PhysicalRSI_core.contracts import Context
 from PhysicalRSI_demos.auto_engineering import trials
 
 
-def test_worker_preserves_virtualenv_and_uses_owned_runtime_paths(tmp_path, monkeypatch):
+@pytest.mark.parametrize('scenario', [None, 'tall-obstacle'])
+def test_worker_preserves_virtualenv_and_uses_owned_runtime_paths(tmp_path, monkeypatch, scenario):
     environment = tmp_path / "venv"
     venv.EnvBuilder(with_pip=False, symlinks=True).create(environment)
     executable = environment / "bin/python"
@@ -25,10 +27,14 @@ def test_worker_preserves_virtualenv_and_uses_owned_runtime_paths(tmp_path, monk
     monkeypatch.setattr(trials.subprocess, "Popen", inspect_launcher)
     worker = trials.NativeWorker(executable, tmp_path / "native")
     try:
-        result = worker.reset(dict(seed=17), Context("launch", deadline=time.monotonic()+10))
+        case=dict(seed=17)
+        if scenario:case['scenario']=scenario
+        result = worker.reset(case, Context("launch", deadline=time.monotonic()+10))
         assert result["observation"] == str(environment)
         command, env = launches[0]
         assert command[0] == str(executable)
+        if scenario:assert command[command.index('--scenario')+1]==scenario
+        else:assert '--scenario' not in command
         assert command[command.index("--runtime-root")+1] == str(tmp_path / "native/runtime/kit")
         assert env["TMPDIR"] == str(tmp_path / "native/runtime/tmp")
         assert env["CUDA_CACHE_PATH"] == str(tmp_path / "native/runtime/cuda-cache")

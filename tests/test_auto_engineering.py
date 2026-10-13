@@ -22,6 +22,29 @@ def test_layout_replay_and_novelty():
     assert len({tuple(layout(i)['tube']) for i in range(20)})==20
 
 
+def test_scenario_changes_obstacle_geometry_and_keeps_legacy_layout():
+    from PhysicalRSI_demos.auto_engineering.task import case_layout
+    original=layout(17)
+    assert original==case_layout(dict(seed=17,scenario='standard'))
+    assert 'scenario' not in original
+    tall=case_layout(dict(seed=17,scenario='tall-obstacle'))
+    assert tall['obstacle_height']==.28 and tall['obstacle'][2]==.14
+    assert tall['obstacle'][2]-tall['obstacle_height']/2==0
+    assert tall['tube']==original['tube'] and tall['receiver']==original['receiver']
+    measured=dict(tube_position=[*tall['receiver'][:2],.081],tube_orientation_wxyz=[1,0,0,0],
+                  tube_velocity=[0,0,0],obstacle_position=tall['obstacle'],
+                  distractor_position=tall['distractor'],gripper_opening=.08)
+    assert judge(tall,measured)['success']
+    assert not judge(original,measured)['success']
+
+
+@pytest.mark.parametrize('case', [dict(seed=True),dict(seed=1,scenario='unknown'),
+                                   dict(seed=1,extra=2),dict(scenario='standard')])
+def test_native_case_rejects_undeclared_conditions(case):
+    from PhysicalRSI_demos.auto_engineering.task import case_layout
+    with pytest.raises(ValueError):case_layout(case)
+
+
 def test_rgbd_detection_ignores_nonfinite_background():
     rgb=np.zeros((20,20,3),dtype=np.uint8);rgb[2:8,2:8]=[10,20,240]
     rgb[10:16,10:16]=[10,200,20];depth=np.ones((20,20));depth[0]=np.nan

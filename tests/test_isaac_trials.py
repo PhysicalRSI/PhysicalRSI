@@ -39,7 +39,7 @@ class ContractWorker(trials.NativeWorker):
         return dict(ready=True, observation=self.initial)
 
     def execute(self, action, context):
-        spec = layout(self.case["seed"])
+        spec = layout(**self.case)
         success = action["memory"]["transit_height_m"] > self.success_height
         measured = dict(tube_position=[*spec["receiver"][:2], .081] if success else spec["tube"],
             tube_orientation_wxyz=[1, 0, 0, 0], tube_velocity=[0, 0, 0], obstacle_position=spec["obstacle"],
@@ -311,6 +311,24 @@ def test_native_empirical_rejects_ambiguous_panels_before_workspace_creation(tmp
     with pytest.raises(ValueError):
         setup(root,sys.executable,panels=panels,strategy='uniform',seed=1)
     assert not root.exists()
+
+
+def test_native_empirical_scenario_cases_reach_trials_and_lower_tail_fit(tmp_path, monkeypatch):
+    from PhysicalRSI_demos.auto_engineering import empirical
+    monkeypatch.setattr(trials, 'NativeWorker', ContractWorker)
+    ContractWorker.resets=[]
+    panels=dict(development=[1,dict(seed=2,scenario='tall-obstacle')],
+                validation=[[3,dict(seed=4,scenario='tall-obstacle')]],
+                test=[5,dict(seed=6,scenario='tall-obstacle')])
+    result=empirical.run(tmp_path,sys.executable,panels=panels,strategy='adaptive',seed=1,
+                         lower_tail_fraction=.5)
+    fit=read_json(tmp_path/'campaign/rounds/round-0001/execution/adaptive-fit.json')
+    assert fit['identity']['settings']['lower_tail_fraction']==.5
+    assert {s['case']['seed'] for s in fit['samples']}=={1,2}
+    assert any(r['case']==dict(seed=6,scenario='tall-obstacle') for r in ContractWorker.resets)
+    assert result['quota']['max_trials']==14
+    with pytest.raises(ValueError):
+        empirical._panels(dict(development=[1],validation=[[dict(seed=1,scenario='tall-obstacle')]],test=[2]))
 
 
 def test_empirical_screening_startup_recovery_preserves_search_and_budget(tmp_path, monkeypatch):

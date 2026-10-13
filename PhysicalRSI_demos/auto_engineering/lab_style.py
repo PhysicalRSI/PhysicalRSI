@@ -97,7 +97,9 @@ def dress(stage, spec, asset_archive=None):
         provenance.append({'asset':filename,'source':'https://github.com/Rui-li023/LabUtopia','license':'CC BY-NC 4.0','sha256':file_digest(source)})
         return True
     # A hollow borosilicate beaker with a rolled lip and amber rim marker.
-    p='/World/Beaker'
+    p='/World/Beaker/Visual'
+    visual=UsdGeom.Xform.Define(stage,p)
+    visual.AddScaleOp().Set(Gf.Vec3f(1.,1.,spec['obstacle_height']/.18))
     if not imported(p+'/Glass','beaker.usda',(0,0,-.09),(.11,.11,.18),'glass'):
         lathe(p+'/Glass',[(0,-.09),(.05,-.09),(.055,-.086),(.055,.081),(.057,.084),(.057,.088),(.054,.09),(.051,.087),(.051,-.082),(0,-.082)],'glass')
     ring(p+'/SafetyRim',.057,.006,.083,.007,'amber')

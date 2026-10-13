@@ -7,8 +7,9 @@ from copy import deepcopy
 from pathlib import Path
 
 from PhysicalRSI_core.self_harness.adaptive_search import AdaptiveParameterEvolver
-from PhysicalRSI_core.self_harness.search_space import ParameterSpace, SearchField
+from PhysicalRSI_core.self_harness.search_space import ParameterSpace, SearchField, finite
 from . import research as r
+from .task import case_layout
 
 CHECKS = ('correct_tube_in_receiver', 'upright', 'supported', 'released',
           'settled', 'obstacle_undisturbed', 'distractor_undisturbed')
@@ -52,12 +53,14 @@ def _panels(value):
     if not isinstance(rounds, list) or not 1 <= len(rounds) <= 20:
         raise ValueError('Declare one to twenty validation panels')
     groups = [value['development'], *rounds, value['test']]
-    if any(not isinstance(seeds, list) or not 1 <= len(seeds) <= 50
-           or any(type(seed) is not int for seed in seeds) for seeds in groups):
-        raise ValueError('Each native panel requires one to fifty integer seeds')
+    if any(not isinstance(cases, list) or not 1 <= len(cases) <= 50 for cases in groups):
+        raise ValueError('Each native panel requires one to fifty seeds or scenario cases')
+    for cases in groups:
+        for case in cases:
+            case_layout(dict(seed=case) if type(case) is int else case)
     if len({len(seeds) for seeds in rounds}) != 1:
         raise ValueError('Every round requires the same paired validation count')
-    seeds = [seed for group in groups for seed in group]
+    seeds = [case if type(case) is int else case['seed'] for group in groups for case in group]
     if len(seeds) != len(set(seeds)):
         raise ValueError('Native seed panels must be disjoint and duplicate-free')
     return value
@@ -65,10 +68,13 @@ def _panels(value):
 
 def setup(workspace, python, *, panels, strategy, seed, population=2,
           device_registry=None, resource='isaac-gpu-0', gui=False,
-          max_replacements=0, extra_trials=0, shared_cache=False, elite_weighting="uniform"):
+          max_replacements=0, extra_trials=0, shared_cache=False, elite_weighting="uniform",
+          lower_tail_fraction=1.):
     panels = _panels(panels)
     if elite_weighting not in ("uniform", "fractional"):
         raise ValueError("Declare uniform or fractional elite weighting")
+    if not 0 < finite(lower_tail_fraction) <= 1:
+        raise ValueError('Declare a lower_tail_fraction in (0, 1]')
     if strategy not in ('adaptive', 'uniform') or type(seed) is not int:
         raise ValueError('Declare adaptive or uniform search and an integer sampler seed')
     if type(population) is not int or not 2 <= population <= 8:
@@ -89,7 +95,8 @@ def setup(workspace, python, *, panels, strategy, seed, population=2,
     evolver = AdaptiveParameterEvolver(archive=archive, space=parameter_space, objective=Objective(),
         task_weights={r.TASK:1}, population=population, seed=seed, strategy=strategy,
         minimum_observations=3, elite_fraction=.5, exploration_fraction=.5,
-        minimum_scale=.025, covariance='diagonal', stop_on_success=False, elite_weighting=elite_weighting)
+        minimum_scale=.025, covariance='diagonal', stop_on_success=False, elite_weighting=elite_weighting,
+        lower_tail_fraction=lower_tail_fraction)
     revision = memory.write({'native-intended-task':dict(conditions=dict(task=r.TASK),
         hypothesis='Explore carrying height and grasp depth using complete development check panels',
         required_checks=['complete-native-transfer-and-disturbance'], counterexample_checks=[],
@@ -101,7 +108,7 @@ def setup(workspace, python, *, panels, strategy, seed, population=2,
     scheduler = r.JobScheduler(root/'scheduler', capacities={'native_worker':1})
 
     def build(directory, context):
-        def cases(seeds):return {r.TASK:[dict(seed=seed) for seed in seeds]}
+        def cases(panel):return {r.TASK:[dict(seed=case) if type(case) is int else deepcopy(case) for case in panel]}
         protocol = r.CaseProtocol(directory/'cases', splits=dict(development=cases(panels['development']),
             validation=cases(panels['validation'][context['index']]), test=cases(panels['test'])))
         suite = r.Suite(python, root/'native'/('round-'+str(context['index'])), resource=resource, gui=gui, cache_root=cache_root)
