@@ -2050,3 +2050,41 @@ evidence of adaptive search outperforming uniform search.
 Integration auditing confirmed the worker matches the native-tested viewport-off
 variant apart from the diagnostic print and configuration key order. All four
 sensor contract tests passed; the device registry was empty after the diagnostic.
+
+### Native observation repeatability finding, 2026-10-14
+
+The ongoing `native-matched-bench-003` freezes source `b810ea0`, sampler seed
+20261018 and disjoint development/validation/test panels. During its adaptive
+arm, the initial harness on development seed 2026101800 passed all seven checks
+in round one but only one in round two. Both completed 1,576 physics steps.
+The layouts, policy memory, initial joint positions, camera calibration and
+entire depth arrays (including NaNs) matched. RGB images differed, producing
+different color masks and different macro-action plans before actuation.
+
+Offline replay using saved RGB-D and camera calibration reproduced both public
+observations and pick/place targets within 1e-6 meters. Receiver height is the
+95th percentile of detected surface points: it changed from 0.0453407764 to
+0.0210000277 meters, shifting the commanded placement height by 0.0243407488
+meters. The median surface height was 0.0209999084 meters in both observations.
+This localizes an observed divergence to perception before control; it does not
+establish why rendering differed or that this alone caused the final failure.
+Changing the estimator requires separate native validation, and no detector
+change was introduced into the frozen study.
+
+Both failed round-one candidates were rejected at development screening while
+remaining in the archive; the incumbent revision was retained and validation
+was skipped. Round two joined four actual development receipts across three
+parameter vectors, including both conflicting incumbent measurements and both
+failed candidates. It proposed one global and one fitted candidate. This proves
+feedback use, not adaptive superiority. Outcome variation limits interpretation
+of single-run comparisons even when declared seeds match. The ongoing study
+has no final score yet and retains all measurements without replacement.
+The second-round global candidate `(0.430, 0.299)` passed all seven development
+checks; the fitted candidate `(0.135, 0.221)` passed three and failed the task.
+These six completed development Trials were independently geometry-audited.
+The successful proposal therefore came from global exploration, not the fitted
+distribution; validation and the full strategy comparison remain outstanding.
+
+Evidence under the study root: `first-round-archive-audit.json`,
+`round-two-feedback-audit.json`, `repeated-initial-observation-audit.json`,
+`replay-perception.py`, and `perception-replay-audit.json`.
