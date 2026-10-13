@@ -2187,3 +2187,54 @@ seconds. The subsequently added receiver-estimator cases were checked with the
 complete auto-engineering test file (20 passes). Integration auditing verifies
 the final implementation matches that frozen snapshot; only documentation,
 the additional test cases and the user-owned `AGENTS.md` differ.
+
+### Completed matched native benchmark, 2026-10-14
+
+`native-matched-bench-004` completed all 48 preregistered Isaac Sim Trials on
+frozen source `ba0de61ec44b2a49f80591cb592f16c6118d84f0`. The source-manifest
+SHA-256 is `579f97b67821d2f5287da9f0b27327aa77d1aaf91a3de45bd20c0443853be02a`.
+Each search arm used two rounds with population two, six development Trials,
+twelve validation Trials and four independent final tests. The fixed initial
+arm used four final tests. Sampler seed was 20261022; development seed was
+2026102200, validation seeds were 2026102201–2204, and held-out test seeds were
+2026102210–2213. No replacement or extra Trials were allowed.
+
+| Arm | Independent test successes | Total Trials | Gain over fixed initial |
+| --- | ---: | ---: | ---: |
+| Fixed initial | 0/4 | 4 | — |
+| Adaptive, fractional elite weighting | 4/4 | 22 | +100 percentage points |
+| Uniform random search | 4/4 | 22 | +100 percentage points |
+
+All successful final episodes passed all seven intended-task checks. The
+complete study contains 75,648 physics steps (1,576 per Trial). The final audit
+independently recomputes geometry checks and validates canonical receipt and
+artifact hashes. The comparison additionally joins final reports to their
+test-case identities, selected candidate hashes and verdicts. The driver
+completed normally and verified the device registry was released.
+
+Both search arms selected the same first-round global proposal:
+`transit_height_m=0.544`, `grasp_depth_fraction=0.38`, with sample height fixed
+at 0.12 meters. Its frozen content hash is
+`24d06886cc03367d2af3528ca58e0d08bfff91b62a1bc0c6baf575797af7feeb`.
+Their first-round random streams and proposals matched. In round two, adaptive
+search fitted four real development observations across three parameter
+vectors and proposed an elite-guided candidate, but all validation candidates
+tied; both arms retained the parent. Thus the observed improvement comes from
+global exploration and validated inheritance. This run establishes no added
+benefit from fitted proposals or superiority over random search.
+
+Evidence is retained under
+`/cpfs02/user/yanming/physicalrsi-core-checks/native-matched-bench-004`:
+`preregistration.json`, `result.json`, `measurement-audit.json`,
+`comparison.json`, `final-search-selection-audit.json`, and the canonical
+Trial directories. `compare.py` reproduces the comparison without executing
+Trials. Earlier interrupted studies remain retained; this completed run does
+not establish that rare startup crashes have been eliminated.
+
+This is a one-sampler-seed, four-test-case pilot on a two-parameter transfer
+task with limited layout variation. It supports improvement over this initial
+strategy on the declared panel, not statistical superiority, general robot
+capability, or cross-task RSI. Further algorithm development needs broader
+development scenarios and independently frozen holdouts that distinguish
+adaptive proposals from global exploration, together with evaluation-cost
+measurements. These completed test cases must not become proposal feedback.
