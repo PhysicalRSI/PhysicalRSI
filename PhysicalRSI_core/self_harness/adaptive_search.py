@@ -66,7 +66,7 @@ class AdaptiveParameterEvolver:
             dependencies={n:file_digest(Path(__file__).with_name(n+'.py')) for n in ('search_space','artifacts','feedback_context')})
 
     def _stable(self):
-        if self.identity()!=self._identity:
+        if digest(self.identity())!=digest(self._identity):
             raise ValueError('Frozen adaptive search implementation changed')
 
     def propose_from_archive(self,parent,evaluations,context,search,output):

@@ -101,7 +101,7 @@ class ScalarRefinementEvolver:
             search_space=file_digest(Path(__file__).with_name('search_space.py')))
 
     def _stable(self):
-        if self.identity() != self._identity:
+        if digest(self.identity()) != digest(self._identity):
             raise ValueError('Frozen scalar search implementation changed')
 
     def propose_from_archive(self, parent, evaluations, context, search, output):

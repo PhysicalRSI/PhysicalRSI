@@ -84,6 +84,39 @@ class PanelObjective:
         return self.scores.get(value['trial']['system2']['candidate_id'], self.default)
 
 
+@pytest.mark.parametrize('kind', ['adaptive', 'scalar'])
+@pytest.mark.parametrize('before,after', [(1, True), (True, 1), (1, 1.0), (False, 0)])
+def test_search_rejects_typed_provider_drift_before_reading_history(tmp_path, monkeypatch, kind, before, after):
+    if kind == 'adaptive':
+        original, args = build(tmp_path)
+        provider = original.objective
+        def create():
+            return AdaptiveParameterEvolver(archive=original.archive, space=original.space,
+                objective=provider, task_weights=original.weights, **original.settings)
+    else:
+        from test_parameter_search import search
+        from PhysicalRSI_core.self_harness.parameter_search import ScalarRefinementEvolver
+        original, args = search(tmp_path)
+        provider = original.classifier
+        def create():
+            return ScalarRefinementEvolver(archive=original.archive, parameter=original.parameter,
+                                           classifier=provider)
+    identity = dict(provider.identity(), settings={'version': before})
+    monkeypatch.setattr(provider, 'identity', lambda: identity)
+    evolver = create()
+    identity['settings']['version'] = after
+    assert evolver.identity() == evolver._identity
+    with monkeypatch.context() as patch:
+        patch.setattr(original.archive, 'development', lambda view: pytest.fail('Changed search must not read history'))
+        with pytest.raises(ValueError, match='search implementation changed'):
+            evolver.propose_from_archive(*args)
+    assert not args[-1].exists()
+    identity['settings']['version'] = before
+    children = evolver.propose_from_archive(*args)
+    assert children
+    assert evolver.resume_proposal_from_archive(*args) == children
+
+
 @pytest.mark.parametrize('score', [0., .5])
 def test_flat_feedback_keeps_global_exploration_without_arbitrary_elites(tmp_path, score):
     history = []

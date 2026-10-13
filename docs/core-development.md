@@ -1527,6 +1527,11 @@ native export, replay results, verified archives and the acceptance audit are at
 
 ## Adaptive parameter search
 
+Both scalar refinement and adaptive parameter search compare canonical JSON
+identity digests against their frozen configuration. Type changes in classifier
+or objective settings are rejected before historical feedback is read or a fit
+is published, even when Python considers the old and new values equal.
+
 `ParameterSpace` declares up to 32 bounded numeric JSON fields across mutable
 harness components. Fields must have existing keys, non-overlapping paths,
 exact component ownership and a declared precision grid. Foundation and weights
