@@ -548,6 +548,40 @@ applicability conditions and check results. `infra.owned_files.OwnedFiles`
 publishes metadata and copied files atomically and rejects changed, missing,
 extra or linked files. It never repairs a published version silently.
 
+New compilations freeze `bundle.json` before backend construction. It binds the
+declared file hashes and regular POSIX permission bits to the check-stage inputs.
+Both backend construction and checking must preserve that exact bundle, and a
+resumed stage cannot reuse a completed report after permission drift. Publication
+passes the checked modes to `OwnedFiles.capture(expected_modes=...)`; it must not
+adopt a later filesystem state. Nonregular or linked compiler output is rejected
+before backend construction. These checks cover declared local files, not
+provider-owned external assets or process isolation.
+
+`physicalrsi.compiled-skill/v2` retains the checked bundle in the owned skill's
+metadata. Reads require an exact match with the published files and modes before
+binding or installation. Historical v1 skill records remain readable under their
+original contract. Existing compilation workspaces and memory references require
+their frozen implementation; they are not silently migrated to new check inputs.
+
+The `compiler-inputs-001` fault injection reproduced a checked mode-0755 script
+being published and bound at mode 0644 by the prior compiler; actual invocation
+then failed with EACCES. The updated compiler rejected both post-check drift and
+drift immediately before storage capture without publishing a skill. After an
+interruption following completed checks, changed permissions blocked recovery;
+restoring the exact checked mode resumed publication without repeating synthesis
+or checks.
+
+A fresh executable response skill was compiled from two axis development Trials
+and used by the ordinary Self-Harness on axis and vector tasks. This CPFS study
+completed 16 Trials, including independent final success on both tasks, and 14
+actual executable invocations (six offline-check calls and eight target actions).
+Independent process recovery added zero Trials/actions and preserved all 378
+tracked files and modes. All 654 tests passed. The old failure, new evidence,
+source snapshots and restart audit are retained at
+`/cpfs02/user/yanming/physicalrsi-core-checks/compiler-inputs-001`.
+This demonstrates executable compilation/transfer integrity on a software
+actuator family; it is not native Isaac transfer or physical qualification.
+
 `skills.SkillLibrary.materialize` copies a skill package into a candidate's
 declared `skills` component. `bind` requires an explicit memory revision,
 lesson ID, applicability context and matching backend. It verifies evidence

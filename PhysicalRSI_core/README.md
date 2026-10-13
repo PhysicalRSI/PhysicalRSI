@@ -137,6 +137,12 @@ can suspend the corresponding lesson; a new skill revision must pass checks and
 fresh selection before deployment. See [compiled skills](../docs/core-development.md#compiled-skills-and-versioned-memory)
 for the scalar-to-vector transfer, counterexample and rollback example.
 
+New skill compilation freezes executable bytes and permissions before checking,
+rechecks them across provider calls, and requires those same modes at publication.
+Compiled-skill v2 records bind this checked bundle; historical v1 records retain
+their original reading contract. See the compilation section of the development
+guide for restart and applicability boundaries.
+
 `harness_tree.HarnessTree` packages scoped branches as one ordinary candidate,
 preserving their component boundaries and logical file names. `RoutedPolicy`
 chooses a branch from public observations and records the actual route in Trial

@@ -1,6 +1,8 @@
 from copy import deepcopy
 from pathlib import Path
+import os
 import shutil
+import stat
 
 import pytest
 
@@ -285,3 +287,102 @@ def test_counterexample_can_compile_a_new_version_without_reactivating_old_skill
     assert operation(dict(position=[0.,0.],target=[3.,-6.]),Context("recompiled-candidate")) == pytest.approx([1.,-2.])
     with pytest.raises(SkillUnavailable):
         library.bind(memory=memory,memory_revision=revised,lesson_id=LESSON,context=CONDITIONS,backend=VectorBackend())
+
+
+@pytest.mark.parametrize('boundary', ['backend', 'check', 'publication'])
+def test_compilation_cannot_publish_a_mode_that_was_not_checked(tmp_path, monkeypatch, boundary):
+    _, _, library, _, _, _, _, experience, _, _ = prepare(tmp_path / 'source')
+    output = tmp_path / 'compilation'
+    before = set(library.skills.root.iterdir())
+    calls = []
+    class Backend(VectorBackend):
+        def build(self, root, entrypoint):
+            operation = super().build(root, entrypoint)
+            if boundary == 'backend':
+                (root / entrypoint).chmod(0o755)
+            return operation
+    class Checker(InverseReplayCheck):
+        def check(self, *args):
+            calls.append('check')
+            result = super().check(*args)
+            if boundary == 'check':
+                (output / 'bundle/program.json').chmod(0o755)
+            return result
+    capture = library.skills.capture
+    def changed(*args, **kwargs):
+        if boundary == 'publication':
+            (output / 'bundle/program.json').chmod(0o755)
+        return capture(*args, **kwargs)
+    monkeypatch.setattr(library.skills, 'capture', changed)
+    engine = ExperienceCompiler(library=library, compiler=ResponseCompiler(), backend=Backend(), checker=Checker())
+    with pytest.raises(ValueError, match='modes'):
+        engine.compile(experience, **compile_request(output))
+    assert calls == ([] if boundary == 'backend' else ['check'])
+    assert set(library.skills.root.iterdir()) == before
+    assert not (output / 'result.json').exists()
+
+
+def test_completed_check_cannot_be_reused_after_mode_drift_on_restart(tmp_path, monkeypatch):
+    _, _, library, _, _, _, _, experience, _, _ = prepare(tmp_path / 'source')
+    provider = ResponseCompiler()
+    calls = []
+    class Checker(InverseReplayCheck):
+        def check(self, *args):
+            calls.append('check')
+            return super().check(*args)
+    engine = ExperienceCompiler(library=library, compiler=provider, backend=VectorBackend(), checker=Checker())
+    output = tmp_path / 'compilation'
+    def interrupted(*args, **kwargs):
+        raise RuntimeError('publication interrupted after completed check')
+    with monkeypatch.context() as patch:
+        patch.setattr(library.skills, 'capture', interrupted)
+        with pytest.raises(RuntimeError, match='publication interrupted'):
+            engine.compile(experience, **compile_request(output))
+    path = output / 'bundle/program.json'
+    expected = read_json(output / 'bundle.json')['file_modes']['program.json']
+    path.chmod(0o755)
+    with pytest.raises(ValueError):
+        engine.compile(experience, **compile_request(output))
+    assert calls == ['check'] and provider.calls == 1
+    path.chmod(expected)
+    revision = engine.compile(experience, **compile_request(output))
+    record = library.read(revision)
+    assert record['metadata']['schema'] == 'physicalrsi.compiled-skill/v2'
+    assert record['metadata']['bundle'] == dict(files=record['files'], file_modes=record['file_modes'])
+    assert calls == ['check'] and provider.calls == 1
+
+
+@pytest.mark.parametrize('kind', ['fifo', 'symlink_directory'])
+def test_nonregular_compiler_outputs_are_rejected_before_backend_execution(tmp_path, kind):
+    _, _, library, _, _, _, _, experience, _, _ = prepare(tmp_path / 'source')
+    class Compiler(ResponseCompiler):
+        def compile(self, values, request, output):
+            draft = super().compile(values, request, output)
+            if kind == 'fifo':
+                os.mkfifo(output / 'undeclared.pipe')
+            else:
+                (output / 'alias').symlink_to(output, target_is_directory=True)
+            return draft
+    class Backend(VectorBackend):
+        def build(self, *args):
+            raise AssertionError('Nonregular bundle reached backend')
+    engine = ExperienceCompiler(library=library, compiler=Compiler(), backend=Backend(), checker=InverseReplayCheck())
+    with pytest.raises(ValueError, match='non-regular|physical'):
+        engine.compile(experience, **compile_request(tmp_path / 'compilation'))
+
+
+def test_v2_skill_read_requires_its_checked_bundle_and_preserves_v1_reading(tmp_path):
+    _, _, library, _, _, _, _, _, revision, _ = prepare(tmp_path / 'source')
+    record = library.read(revision)
+    folder = library.skills.folder(revision) / 'files'
+    sources = {name: dict(path=str(folder / name), sha256=sha) for name, sha in record['files'].items()}
+    changed = deepcopy(record['metadata'])
+    changed['bundle']['file_modes']['program.json'] ^= 0o100
+    bad = library.skills.capture(changed, sources)
+    with pytest.raises(ValueError, match='checked bundle'):
+        library.read(bad)
+    legacy = deepcopy(record['metadata'])
+    legacy['schema'] = 'physicalrsi.compiled-skill/v1'
+    del legacy['bundle']
+    old = library.skills.capture(legacy, sources, bind_modes=False)
+    assert library.read(old)['metadata'] == legacy

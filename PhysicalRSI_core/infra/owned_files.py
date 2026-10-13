@@ -80,8 +80,12 @@ class OwnedFiles:
                 raise ValueError('Owned artifact file mode changed: ' + name)
         return deepcopy(record)
 
-    def capture(self, metadata, files, *, bind_modes=True):
-        """Pin modes by default; bind_modes=False only reconstructs legacy v1 records."""
+    def capture(self, metadata, files, *, bind_modes=True, expected_modes=None):
+        """Pin modes, optionally requiring an already checked declaration.
+
+        bind_modes=False only reconstructs legacy v1 records. expected_modes
+        prevents publication from adopting permission drift after an offline check.
+        """
         if not isinstance(files, dict) or not files:
             raise ValueError("Declare a nonempty owned artifact closure")
         files = deepcopy(files)
@@ -90,6 +94,11 @@ class OwnedFiles:
                 raise ValueError("Invalid artifact source declaration")
         if type(bind_modes) is not bool:
             raise ValueError('Declare whether to bind artifact modes')
+        if expected_modes is not None:
+            expected_modes = deepcopy(expected_modes)
+            if (not bind_modes or not isinstance(expected_modes, dict) or set(expected_modes) != set(files)
+                    or any(type(m) is not int or not 0 <= m <= 0o777 for m in expected_modes.values())):
+                raise ValueError('Expected modes require exact bound POSIX permission coverage')
         body = dict(schema="physicalrsi.owned-files/v2" if bind_modes else "physicalrsi.owned-files/v1", metadata=deepcopy(metadata),
                     files={name: entry["sha256"] for name, entry in files.items()})
         if bind_modes:
@@ -102,6 +111,8 @@ class OwnedFiles:
                 if modes[name] > 0o777:
                     raise ValueError('Owned files require regular POSIX permission bits')
             body['file_modes'] = modes
+            if expected_modes is not None and modes != expected_modes:
+                raise ValueError('Artifact source modes differ from the checked declaration')
         revision = digest(body)
         target = self.folder(revision)
         with locked(self.root / ".lock"):

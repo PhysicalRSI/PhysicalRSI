@@ -71,6 +71,25 @@ def test_legacy_identities_stay_readable_without_silent_upgrade(tmp_path):
         EvolutionSpec().compare(bound, legacy)
 
 
+def test_owned_capture_requires_the_previously_checked_permission_map(tmp_path):
+    source = executable(tmp_path / 'source')
+    script = Path(source['root']) / 'tool.sh'
+    store = OwnedFiles(tmp_path / 'store')
+    files = {'tool.sh': dict(path=str(script), sha256=file_digest(script))}
+    script.chmod(0o644)
+    with pytest.raises(ValueError, match='checked declaration'):
+        store.capture({'test': 1}, files, expected_modes={'tool.sh': 0o755})
+    assert not store.root.exists()
+    for invalid in ({}, {'tool.sh': True}, {'tool.sh': 0o4755}, {'tool.sh': -1}, {'wrong': 0o644}):
+        with pytest.raises(ValueError, match='coverage'):
+            store.capture({'test': 1}, files, expected_modes=invalid)
+    with pytest.raises(ValueError, match='coverage'):
+        store.capture({'test': 1}, files, bind_modes=False, expected_modes={'tool.sh': 0o644})
+    script.chmod(0o755)
+    revision = store.capture({'test': 1}, files, expected_modes={'tool.sh': 0o755})
+    assert store.read(revision)['file_modes'] == {'tool.sh': 0o755}
+
+
 @pytest.mark.parametrize('invalid', ['missing', 'extra', 'bool', 'negative', 'special', 'null'])
 def test_mode_declaration_requires_exact_regular_permission_coverage(tmp_path, invalid):
     value = executable(tmp_path / 'parent')

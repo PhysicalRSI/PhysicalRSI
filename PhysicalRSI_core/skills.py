@@ -38,8 +38,12 @@ class SkillLibrary:
     def read(self, revision):
         record = self.skills.read(revision)
         value = record["metadata"]
-        if value.get("schema") != "physicalrsi.compiled-skill/v1":
+        if value.get("schema") not in {"physicalrsi.compiled-skill/v1", "physicalrsi.compiled-skill/v2"}:
             raise ValueError("Unknown compiled skill")
+        if value["schema"] == "physicalrsi.compiled-skill/v2" and (
+                record["schema"] != "physicalrsi.owned-files/v2"
+                or digest(value.get("bundle")) != digest(dict(files=record["files"], file_modes=record["file_modes"]))):
+            raise ValueError("Published skill differs from its checked bundle")
         self.experiences.read(value["experience_revision"])
         if (set(value["checks"]) != set(value["request"]["required_checks"])
                 or any(row.get("passed") is not True for row in value["checks"].values())):

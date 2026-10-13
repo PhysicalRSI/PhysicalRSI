@@ -6,9 +6,10 @@ require a matching recovery method; no arbitrary code is loaded from memory.
 """
 from copy import deepcopy
 from pathlib import Path
+import stat
 
 from ..contracts import ReconciliationRequired
-from ..infra.owned_files import physical
+from ..infra.owned_files import _file_names, physical
 from ..infra.storage import atomic_json, digest, file_digest, identifier, locked, read_json
 from ..skills import SkillLibrary, operation_identity
 from .evaluation import freeze_json
@@ -104,17 +105,28 @@ class ExperienceCompiler:
                 raise ValueError("Compiler must declare an executable bundle and testable hypothesis")
 
             def verify_bundle():
-                actual = {str(p.relative_to(bundle)) for p in bundle.rglob("*") if p.is_file() or p.is_symlink()}
+                actual = _file_names(bundle)
                 if actual != set(draft["files"]):
                     raise ValueError("Compiler bundle closure differs from its declaration")
+                modes = {}
                 for path, sha in draft["files"].items():
-                    if file_digest(physical(bundle, path)) != sha:
+                    source = physical(bundle, path)
+                    if file_digest(source) != sha:
                         raise ValueError("Compiled executable changed")
+                    modes[path] = stat.S_IMODE(source.stat().st_mode)
+                    if modes[path] > 0o777:
+                        raise ValueError("Compiled bundle requires regular POSIX permission bits")
+                return dict(files=deepcopy(draft["files"]), file_modes=modes)
 
-            verify_bundle()
+            # Pin the runnable declaration before backend construction or any
+            # check. A resumed stage cannot adopt changed modes with old reports.
+            checked_bundle = verify_bundle()
+            freeze_json(output / "bundle.json", checked_bundle)
             operation = self.backend.build(bundle, draft["entrypoint"])
+            if verify_bundle() != checked_bundle:
+                raise ValueError("Compiled bundle modes changed during backend construction")
             operation_spec = operation_identity(operation)
-            check_inputs = dict(inputs=inputs, draft=draft, operation=operation_spec)
+            check_inputs = dict(inputs=inputs, draft=draft, bundle=checked_bundle, operation=operation_spec)
 
             def check(method):
                 return method(operation, deepcopy(values), deepcopy(request))
@@ -123,7 +135,8 @@ class ExperienceCompiler:
             reports = self._stage(output / "checks.json", check_inputs,
                 lambda: check(self.checker.check), (lambda: check(resume)) if callable(resume) else None)
             self._stable()
-            verify_bundle()
+            if verify_bundle() != checked_bundle:
+                raise ValueError("Compiled bundle modes changed during checks")
             # Verify the complete source again after untrusted proposal/check ports.
             values = self.experiences.read(experience_revision)
             trial_ids = {v["trial_sha256"] for v in values}
@@ -135,12 +148,13 @@ class ExperienceCompiler:
                     raise ValueError("Compilation check requires bound development trial evidence")
             if not all(report["passed"] for report in reports.values()):
                 raise CompilationRejected("Executable skill failed its compilation checks")
-            metadata = dict(schema="physicalrsi.compiled-skill/v1", input_sha256=digest(inputs), request=request,
+            metadata = dict(schema="physicalrsi.compiled-skill/v2", input_sha256=digest(inputs), request=request,
                 experience_revision=experience_revision, compiler=self.compiler.identity(), backend=self.backend.identity(),
                 checker=self.checker.identity(), operation=operation_spec, checks=reports,
-                entrypoint=draft["entrypoint"], hypothesis=draft["hypothesis"], qualification=None)
+                bundle=checked_bundle, entrypoint=draft["entrypoint"], hypothesis=draft["hypothesis"], qualification=None)
             revision = self.library.skills.capture(metadata,
-                {name: dict(path=str(bundle / name), sha256=sha) for name, sha in draft["files"].items()})
+                {name: dict(path=str(bundle / name), sha256=sha) for name, sha in draft["files"].items()},
+                expected_modes=checked_bundle["file_modes"])
             self.library.read(revision)
             atomic_json(completed, dict(input_sha256=digest(inputs), skill_revision=revision))
             return revision
