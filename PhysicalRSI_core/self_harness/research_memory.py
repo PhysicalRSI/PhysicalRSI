@@ -11,17 +11,23 @@ from .artifacts import verify_harness
 from .protocol import _sha
 
 
-def _evidence(files):
+def _evidence(files, *, verified=None):
     if not isinstance(files, dict) or not files:
         raise ValueError("Nonempty evidence required")
     for name, expected in files.items():
         _sha(expected)
+        if verified is not None and name in verified:
+            if verified[name] != expected:
+                raise ValueError("Memory evidence changed: " + name)
+            continue
         path = Path(name)
         if not path.is_absolute() or not path.is_file() or file_digest(path) != expected:
             raise ValueError("Memory evidence changed: " + name)
+        if verified is not None:
+            verified[name] = expected
 
 
-def _lesson(value):
+def _lesson(value, *, verified=None):
     if value.get("status", "active") not in {"active", "suspended"}:
         raise ValueError("Invalid lesson status")
     if not isinstance(value.get("conditions"), dict) or not value["conditions"]:
@@ -40,7 +46,7 @@ def _lesson(value):
             raise ValueError("Duplicate memory checks")
         for check in group:
             identifier(check)
-    _evidence(value["evidence"])
+    _evidence(value["evidence"], verified=verified)
     digest(value)
 
 
@@ -74,8 +80,11 @@ class ResearchMemory:
         value = read_json(self.root / (revision + ".json"))
         if digest(value) != revision or value.get("schema") != "physicalrsi.research-memory/v1":
             raise ValueError("Memory snapshot changed")
+        # Deduplicate shared evidence only within this read. Later reads must
+        # observe changed or missing files, including through bound skills.
+        verified = {}
         for lesson in value["lessons"].values():
-            _lesson(lesson)
+            _lesson(lesson, verified=verified)
         return deepcopy(value)
 
     def retrieve(self, revision, context):

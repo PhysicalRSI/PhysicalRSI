@@ -131,3 +131,45 @@ def test_counterexample_suspends_and_refinement_retains_regression(tmp_path):
     atomic_json(path, {'changed': True})
     with pytest.raises(ValueError, match='evidence changed'):
         memory.read(refined)
+
+
+def test_shared_evidence_is_hashed_once_per_memory_read_and_rechecked_on_next_read(tmp_path, monkeypatch):
+    from PhysicalRSI_core.self_harness import research_memory as module
+    shared = tmp_path / 'shared-rollout.bin'
+    shared.write_bytes(b'rollout evidence\n' * 32768)
+    separate = tmp_path / 'second-rollout.bin'
+    separate.write_bytes(b'another independent execution')
+    lesson = dict(conditions={'task': 'counter'}, hypothesis='Shared development observation',
+                  required_checks=['activation'], counterexample_checks=[],
+                  evidence={str(shared): file_digest(shared), str(separate): file_digest(separate)})
+    memory = ResearchMemory(tmp_path / 'memory')
+    revision = memory.write({'lesson-' + str(i): deepcopy(lesson) for i in range(32)})
+    calls = []
+    original = module.file_digest
+
+    def counted(path):
+        calls.append(str(path))
+        return original(path)
+
+    monkeypatch.setattr(module, 'file_digest', counted)
+    first = memory.read(revision)
+    assert len(first['lessons']) == 32
+    assert sorted(calls) == sorted([str(shared), str(separate)])
+    calls.clear()
+    assert memory.read(revision) == first
+    assert sorted(calls) == sorted([str(shared), str(separate)])
+    shared.write_bytes(b'changed rollout evidence')
+    with pytest.raises(ValueError, match='evidence changed'):
+        memory.read(revision)
+
+
+def test_shared_evidence_conflicting_digests_cannot_reuse_a_previous_check(tmp_path):
+    from PhysicalRSI_core.infra.storage import digest, read_json
+    _, _, _, memory, revision, _, evidence = fixture(tmp_path)
+    value = read_json(memory.root / (revision + '.json'))
+    value['lessons']['z-conflicting'] = deepcopy(value['lessons']['recovery'])
+    value['lessons']['z-conflicting']['evidence'][str(evidence)] = '0' * 64
+    changed_revision = digest(value)
+    atomic_json(memory.root / (changed_revision + '.json'), value)
+    with pytest.raises(ValueError, match='evidence changed'):
+        memory.read(changed_revision)

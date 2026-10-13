@@ -824,6 +824,17 @@ lineage: the candidate owns its executable copy, while those stores retain its
 provenance and lesson history. Provider-owned external assets are not copied
 implicitly.
 
+Each `ResearchMemory.read` hashes a shared evidence path once across all lessons
+and checks every declared digest against that result. The cache belongs only to
+that call: later reads recheck the files, and conflicting digest declarations
+are rejected. This reduces repeated evidence I/O without a persistent cache.
+A local CPFS benchmark with 32 lessons sharing two 1 MiB files measured six
+alternating old/new read pairs. Median read time decreased from 242 ms to 10 ms,
+with 64 versus two file hashes and identical returned snapshots. This used
+warmed filesystem caches and measures one read, not end-to-end RSI throughput.
+Source hashes and individual observations are retained in
+`/cpfs02/user/yanming/physicalrsi-core-checks/core-memory-shared-evidence-001/benchmark.json`.
+
 `install` creates a new `ResearchMemory` snapshot without replacing prior
 lessons. A lesson marked active is eligible for an experiment; normal
 Self-Harness admission, independent paired validation and CAS still select the
