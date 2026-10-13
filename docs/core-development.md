@@ -770,8 +770,10 @@ validation results cannot be substituted for development inputs.
   publishing an eligible skill. Trusted checkers still own scientific validity;
   a passing offline check does not establish transfer or deployment success.
 
-`compile` records materialization and checking separately. Interrupted provider
-calls require `resume_compile` or `resume_check`; source files and provider
+`compile` records materialization and checking separately. Final report
+validation uses the frozen required-check list; later edits to the caller's
+list belong to a new compilation request. Interrupted provider calls require
+`resume_compile` or `resume_check`; source files and provider
 identities are checked again before publication. Published skills bind the
 owned experience, compiler/backend/checker identities, operation contracts,
 applicability conditions and check results. `infra.owned_files.OwnedFiles`

@@ -457,3 +457,30 @@ def test_withdrawing_one_skill_preserves_independent_skill_and_historical_memory
     assert len(resets) == 22
     assert run(primary, gain=2.) == result
     assert len(resets) == 22
+
+
+def test_compilation_uses_frozen_checks_when_caller_configuration_changes(tmp_path):
+    _, _, library, _, _, _, _, experience, _, _ = prepare(tmp_path / 'source-study')
+    request = compile_request(tmp_path / 'changed-caller-settings')
+    frozen_checks = list(request['required_checks'])
+
+    class CallerSettingsChanged(InverseReplayCheck):
+        def check(self, operation, values, supplied):
+            reports = super().check(operation, values, supplied)
+            request['required_checks'].append('next-compilation-check')
+            return reports
+
+    compiler = ResponseCompiler()
+    engine = ExperienceCompiler(library=library, compiler=compiler, backend=VectorBackend(),
+                                checker=CallerSettingsChanged())
+    revision = engine.compile(experience, **request)
+    record = library.read(revision)['metadata']
+    assert record['request']['required_checks'] == frozen_checks
+    assert set(record['checks']) == set(frozen_checks)
+    assert request['required_checks'] == frozen_checks + ['next-compilation-check']
+    # Resume the original request; later caller settings belong to a new run.
+    restored = dict(request, required_checks=frozen_checks)
+    assert engine.compile(experience, **restored) == revision
+    assert compiler.calls == 1
+    with pytest.raises(ValueError, match='changed|Changed'):
+        engine.compile(experience, **request)

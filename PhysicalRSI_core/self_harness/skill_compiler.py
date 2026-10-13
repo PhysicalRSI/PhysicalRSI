@@ -140,7 +140,7 @@ class ExperienceCompiler:
             # Verify the complete source again after untrusted proposal/check ports.
             values = self.experiences.read(experience_revision)
             trial_ids = {v["trial_sha256"] for v in values}
-            if not isinstance(reports, dict) or set(reports) != set(required_checks):
+            if not isinstance(reports, dict) or set(reports) != set(request["required_checks"]):
                 raise ValueError("Compilation checks must cover the exact declared checks")
             for report in reports.values():
                 if (type(report.get("passed")) is not bool or not isinstance(report.get("trials"), list)
