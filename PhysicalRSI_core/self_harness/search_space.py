@@ -64,7 +64,12 @@ class SearchField:
         self.node(document)[self.key[-1]]=value
 
     def quantize(self, unit):
-        return min(self.upper,max(self.lower,round(self.lower+finite(unit)*(self.upper-self.lower),self.precision)))
+        unit=min(1.,max(0.,finite(unit)))
+        span=self.upper-self.lower
+        # Anchor near the requested endpoint: lower + span can lose upper
+        # entirely when the bounds have very different magnitudes.
+        value=(self.lower+unit*span if unit<=.5 else self.upper-(1.-unit)*span)
+        return min(self.upper,max(self.lower,round(value,self.precision)))
 
 
 class ParameterSpace:

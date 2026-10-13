@@ -1513,7 +1513,10 @@ native export, replay results, verified archives and the acceptance audit are at
 `ParameterSpace` declares up to 32 bounded numeric JSON fields across mutable
 harness components. Fields must have existing keys, non-overlapping paths,
 exact component ownership and a declared precision grid. Foundation and weights
-remain fixed. Candidate publication verifies the entire closure, synchronizes
+remain fixed. Quantization clips finite unit coordinates to `[0, 1]` and
+interpolates from the nearer endpoint, preserving declared bounds even when
+their magnitudes differ enough for floating-point subtraction to lose precision.
+Candidate publication verifies the entire closure, synchronizes
 files and atomically publishes each immutable candidate; an interrupted proposal
 can resume the same frozen fit without duplicate execution.
 

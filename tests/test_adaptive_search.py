@@ -31,6 +31,26 @@ def space():
     return ParameterSpace([SearchField('control','control.json',(k,),.1,8) for k in ('proportional','damping')])
 
 
+@pytest.mark.parametrize('upper', [1., .125])
+@pytest.mark.parametrize('unit', [1., .9999999999999999])
+def test_wide_search_range_preserves_upper_boundary_and_nearby_values(tmp_path, upper, unit):
+    from decimal import Decimal, localcontext
+    field = SearchField('control', 'control.json', ('proportional',), -1e16, upper, precision=9)
+    with localcontext() as context:
+        context.prec = 80
+        u = Decimal.from_float(unit)
+        exact = Decimal.from_float(field.lower) * (1 - u) + Decimal.from_float(upper) * u
+        expected = float(round(exact, 9))
+    value = field.quantize(unit)
+    assert value == expected
+    parent = candidate(tmp_path / 'parent', (field.lower, .1))
+    declared = ParameterSpace([field])
+    child, _ = declared.candidate(parent, declared.inspect(parent), [value],
+                                  output=tmp_path / 'child', name='boundary')
+    assert declared.inspect(child)['values'] == [expected]
+    assert declared.quantize(declared.unit([upper])) == [upper]
+
+
 def values(root,harness,*,tasks=demo.TASKS,steps=100,environment_factory=demo.Environment,case=None):
     suite=demo.Suite();result=[]
     for task in tasks:
