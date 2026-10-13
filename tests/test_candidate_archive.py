@@ -242,3 +242,29 @@ def test_rejected_candidates_keep_reasons_without_inventing_evaluation_scores(tm
         assert rejected[0]["metrics"] is None and entry["comparison"] is None
     assert campaign.run(initial) == result
     assert len(suite.resets) == 4
+
+
+def test_rollback_keeps_archived_branches_but_cannot_acknowledge_old_selection(tmp_path):
+    from PhysicalRSI_core.lineage import StateConflict
+    campaign, initial, suite, quota = setup(tmp_path)
+    result = campaign.run(initial)
+    selected = result['current']
+    archive, entries = archive_entries(tmp_path)
+    first = next(entry for entry in entries if 'specialist-axis' in entry['candidates'])
+    view = archive.view(scope=first['scope'], policy_sha256=first['policy_sha256'])
+    summaries = archive.summaries(view)
+    before = len(suite.resets), quota.status()
+    restored = campaign.state.rollback(selected['revision'], reason='regression after second selection')
+    assert restored['action'] == 'rollback'
+    assert restored['decision'] == campaign.state.read(restored['rollback_to'])['decision']
+    child = archive.fork(view, first['revision'], 'specialist-axis', parent=restored['harness'],
+        output=tmp_path / 'after-rollback-branch', name='retry-specialist', evolution=EvolutionSpec(('control',)))
+    assert child['parent_sha256'] == restored['freeze_sha256']
+    assert verify_harness(child) == first['candidates']['specialist-axis']['freeze_sha256']
+    assert archive.summaries(view) == summaries
+    # A rollback carries old evidence, but is not a completed commit from C to B.
+    with pytest.raises(StateConflict, match='Committed parent changed'):
+        campaign.state.commit(selected['revision'], restored['harness'],
+                              evidence=restored['evidence'], decision=restored['decision'])
+    assert campaign.state.resolve() == restored
+    assert (len(suite.resets), quota.status()) == before

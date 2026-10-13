@@ -119,7 +119,8 @@ class HarnessState:
             freeze = verify_harness(survivor)
             # Idempotent after a crash between CAS and the loop's commit receipt.
             if (
-                current["previous"] == expected
+                current["action"] in {"selection", "assessment"}
+                and current["previous"] == expected
                 and current.get("decision") == decision
                 and current["evidence"] == evidence
                 and current["freeze_sha256"] == freeze

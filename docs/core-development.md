@@ -134,6 +134,12 @@ An inherited candidate publishes a `selection` record. Consumers must distinguis
 an artifact revision from a lineage revision: a changed lineage head may record
 new observations without changing the executing controller. Publication recovery
 reuses the exact assessment after interruption and does not rerun completed trials.
+Commit retry acknowledgment is limited to `selection` and `assessment` records.
+A rollback may retain the target's old decision and evidence, but cannot be
+acknowledged as a new commit from its preceding head. Such a request raises a
+parent conflict and preserves the rollback head. Archived branches remain
+available for new proposals against the restored harness; their old decisions
+do not authorize promotion.
 No-candidate and all-admission-rejected rounds have no complete paired scores;
 they retain their ordinary campaign/archive receipts without an assessment.
 
