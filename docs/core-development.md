@@ -296,6 +296,15 @@ while checking every reference's declared digest and containment. Conflicting
 digests are rejected, and every later selection call reads the files afresh;
 this does not cache evidence verification across decisions.
 
+A local CPFS measurement used 32 paired cases sharing one approximately 1 MiB
+evidence file. Six alternating baseline/updated pairs after filesystem warmup
+produced identical decisions; median selection time was 0.2006 s before and
+0.0060 s after, with 64 versus one file hash per call. This single shared-file
+workload does not establish end-to-end RSI throughput or native performance.
+The comparison script, source hashes and individual measurements are retained in
+`/cpfs02/user/yanming/physicalrsi-core-checks/core-selection-evidence-001/benchmark.json`
+and its adjacent `benchmark.py` and `baseline_selection.py`.
+
 The Trial runtime and `ExperimentEvaluator` share `runtime_implementation()`,
 an explicit hash map of their owned execution dependencies: runtime, contracts,
 Trial types, artifact capture, evidence reading, embodiment, timing, device
