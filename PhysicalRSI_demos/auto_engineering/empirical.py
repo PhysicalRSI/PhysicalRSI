@@ -65,7 +65,7 @@ def _panels(value):
 
 def setup(workspace, python, *, panels, strategy, seed, population=2,
           device_registry=None, resource='isaac-gpu-0', gui=False,
-          max_replacements=0, extra_trials=0):
+          max_replacements=0, extra_trials=0, shared_cache=False):
     panels = _panels(panels)
     if strategy not in ('adaptive', 'uniform') or type(seed) is not int:
         raise ValueError('Declare adaptive or uniform search and an integer sampler seed')
@@ -74,7 +74,10 @@ def setup(workspace, python, *, panels, strategy, seed, population=2,
     if (type(max_replacements) is not int or not 0 <= max_replacements <= 10
             or type(extra_trials) is not int or extra_trials < 0):
         raise ValueError('Declare a bounded Trial replacement allowance and extra Trial capacity')
+    if type(shared_cache) is not bool:
+        raise ValueError("Shared cache option must be boolean")
     root = Path(workspace).resolve()
+    cache_root = root / "native-cache" if shared_cache else None
     initial = r.manifest(root/'seed', 'initial') if (root/'seed').exists() else r.create_seed(root/'seed')
     state, memory = r.HarnessState(root/'state'), r.ResearchMemory(root/'memory')
     archive = r.CandidateArchive(root/'archive')
@@ -99,10 +102,10 @@ def setup(workspace, python, *, panels, strategy, seed, population=2,
         def cases(seeds):return {r.TASK:[dict(seed=seed) for seed in seeds]}
         protocol = r.CaseProtocol(directory/'cases', splits=dict(development=cases(panels['development']),
             validation=cases(panels['validation'][context['index']]), test=cases(panels['test'])))
-        suite = r.Suite(python, root/'native'/('round-'+str(context['index'])), resource=resource, gui=gui)
+        suite = r.Suite(python, root/'native'/('round-'+str(context['index'])), resource=resource, gui=gui, cache_root=cache_root)
         declared = r.PreregisteredSuite(suite, protocol)
         screening = r.ExperimentEvaluator(suite=r.PreregisteredSuite(r.Suite(python, suite.root/'screening',
-            resource=resource, gui=gui), protocol), budgets={r.TASK:r.Budget(1,1200)}, scope=r.SCOPE,
+            resource=resource, gui=gui, cache_root=cache_root), protocol), budgets={r.TASK:r.Budget(1,1200)}, scope=r.SCOPE,
             system2=r.Revision('isaac-empirical-screening','1'), quota=quota, device_registry=registry,
             max_replacements=max_replacements)
         evaluator = r.MultiFidelityEvaluator(suite=declared, budgets={r.TASK:r.Budget(1,1200)}, scope=r.SCOPE,

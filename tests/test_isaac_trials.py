@@ -256,7 +256,7 @@ def test_native_empirical_contract_uses_complete_panels_and_two_mutable_paramete
     monkeypatch.setattr(trials,'NativeWorker',EmpiricalContractWorker)
     EmpiricalContractWorker.resets=[]
     panels=dict(development=[1000,50001],validation=[[62000,62001],[62100,62101]],test=[63000,63001,63002])
-    result=empirical.run(tmp_path,sys.executable,panels=panels,strategy='adaptive',seed=sampler_seed)
+    result=empirical.run(tmp_path,sys.executable,panels=panels,strategy='adaptive',seed=sampler_seed,shared_cache=True)
     fits=[read_json(p) for p in sorted((tmp_path/'campaign/rounds').glob('*/execution/adaptive-fit.json'))]
     assert len(fits)==2 and [f['model_ready'] for f in fits]==[False,True]
     assert len(fits[0]['panel'])==len(fits[1]['panel'])==2
@@ -269,7 +269,7 @@ def test_native_empirical_contract_uses_complete_panels_and_two_mutable_paramete
     assert result['quota']['max_trials']==27 and result['quota']['reserved_trials']==len(EmpiricalContractWorker.resets)
     assert result['qualification'] is None
     before=len(EmpiricalContractWorker.resets)
-    assert empirical.run(tmp_path,sys.executable,panels=panels,strategy='adaptive',seed=sampler_seed)==result
+    assert empirical.run(tmp_path,sys.executable,panels=panels,strategy='adaptive',seed=sampler_seed,shared_cache=True)==result
     assert len(EmpiricalContractWorker.resets)==before
     scheduler=read_json(tmp_path/'campaign/rounds/round-0001/execution/config.json')['identities']['evaluator']['scheduling']
     assert scheduler['workers']==1
@@ -371,3 +371,67 @@ def test_empirical_recovery_options_rejected_before_workspace_creation(tmp_path,
         empirical.setup(root, sys.executable, panels=dict(development=[1], validation=[[2]], test=[3]),
                         strategy='adaptive', seed=1, **options)
     assert not root.exists()
+
+
+def test_native_shared_cache_reuses_only_derived_data_across_worker_roots(tmp_path, monkeypatch):
+    launches = []
+
+    def capture(command, **kwargs):
+        launches.append(dict(command=command, **kwargs))
+        raise RuntimeError('recorded launch boundary')
+
+    monkeypatch.setattr(trials.subprocess, 'Popen', capture)
+    cache = tmp_path / 'shared-cache'
+    roots = [tmp_path / 'round-0', tmp_path / 'round-1-screening']
+    for index, root in enumerate(roots):
+        worker = trials.NativeWorker(sys.executable, root, cache_root=cache)
+        assert worker.identity()['cache_root'] == str(cache)
+        with pytest.raises(RuntimeError, match='launch boundary'):
+            worker.reset(dict(seed=1), Context('episode-' + str(index), harness_revision='candidate'))
+        assert (root / 'runtime/kit/cache').is_symlink()
+        assert (root / 'runtime/kit/cache').resolve() == cache / 'kit'
+        if index == 0:
+            (cache / 'kit/compiled-probe').write_text('derived cache only')
+        assert (root / 'runtime/kit/cache/compiled-probe').read_text() == 'derived cache only'
+    for key in ('XDG_CACHE_HOME', 'CUDA_CACHE_PATH', '__GL_SHADER_DISK_CACHE_PATH'):
+        assert launches[0]['env'][key] == launches[1]['env'][key]
+    for key in ('TMPDIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME'):
+        assert launches[0]['env'][key] != launches[1]['env'][key]
+    assert launches[0]['command'] != launches[1]['command']
+    assert not (cache / 'ipc').exists() and not (cache / 'episode').exists()
+
+
+@pytest.mark.parametrize('conflict', ['existing-directory', 'different-link', 'nested-target', 'ancestor-target'])
+def test_native_shared_cache_refuses_to_replace_existing_cache_or_create_cycle(tmp_path, conflict):
+    root, shared = tmp_path / 'native', tmp_path / 'shared'
+    local = root / 'runtime/kit/cache'
+    local.parent.mkdir(parents=True)
+    if conflict == 'existing-directory':
+        local.mkdir()
+        (local / 'retained').write_text('keep')
+    elif conflict == 'different-link':
+        old = tmp_path / 'previous-cache'
+        old.mkdir()
+        local.symlink_to(old, target_is_directory=True)
+    elif conflict == 'nested-target':
+        shared = local / 'nested'
+    else:
+        shared = root / 'runtime'
+    worker = trials.NativeWorker(sys.executable, root, cache_root=shared)
+    with pytest.raises(ValueError, match='cache'):
+        worker._prepare_cache()
+    if conflict != 'ancestor-target':
+        assert not shared.exists()
+    else:
+        assert not local.exists()
+    if conflict == 'existing-directory':
+        assert (local / 'retained').read_text() == 'keep' and not local.is_symlink()
+    elif conflict == 'different-link':
+        assert local.resolve() == old
+
+
+def test_native_cache_is_isolated_by_default(tmp_path):
+    worker = trials.NativeWorker(sys.executable, tmp_path / 'native')
+    assert worker._prepare_cache() == tmp_path / 'native/runtime'
+    assert worker.identity()['cache_root'] is None
+    assert not (tmp_path / 'native').exists()

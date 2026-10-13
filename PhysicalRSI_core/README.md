@@ -245,3 +245,12 @@ cheaper. This optional mode does not establish a general performance advantage.
 The native [two-parameter search adapter](../PhysicalRSI_demos/auto_engineering/empirical.py)
 uses the same adaptive evolver, archive, screening and paired-validation ports.
 See [configuration and evidence boundaries](../docs/core-development.md#native-two-parameter-adaptive-search).
+
+A [two-round native study](../docs/core-development.md#observed-native-adaptive-search-closure-2026-10-13)
+completed 11 Trials and passed its single held-out case. Archive-backed second-round
+fitting was verified; improvement over uniform search remains unproven.
+
+Native research accepts opt-in `shared_cache=True`; a
+[two-Trial cache probe](../docs/core-development.md#observed-shared-native-cache-2026-10-13)
+retained both task successes and reduced observed elapsed time from 257 s to 176 s.
+This single pair does not establish a general speedup.

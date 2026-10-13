@@ -110,7 +110,7 @@ class Reflector:
 
 def setup(workspace, python, *, episodes=3, rounds=2, gui=False, device_registry=None,
           resource="isaac-gpu-0", evolver=None, staged=False, screen_incumbent=False, feedback_search=False,
-          max_replacements=0, extra_trials=0):
+          max_replacements=0, extra_trials=0, shared_cache=False):
     if type(episodes) is not int or not 1 <= episodes <= 50 or type(rounds) is not int or not 1 <= rounds <= 20:
         raise ValueError("Use 1 to 50 validation cases and 1 to 20 rounds")
     if type(feedback_search) is not bool or (feedback_search and evolver is not None):
@@ -123,7 +123,10 @@ def setup(workspace, python, *, episodes=3, rounds=2, gui=False, device_registry
     staged = staged or feedback_search
     if screen_incumbent and not staged:
         raise ValueError("Declare staged screening before requesting incumbent screening")
+    if type(shared_cache) is not bool:
+        raise ValueError("Shared cache option must be boolean")
     root = Path(workspace).resolve()
+    cache_root = root / "native-cache" if shared_cache else None
     seed = root / "seed"
     initial = manifest(seed, "initial") if seed.exists() else create_seed(seed)
     state, memory = HarnessState(root / "state"), ResearchMemory(root / "memory")
@@ -149,7 +152,7 @@ def setup(workspace, python, *, episodes=3, rounds=2, gui=False, device_registry
             validation={TASK: [dict(seed=(40000 if feedback_search else 20000 if staged else 1000)
                                           + context["index"] * 100 + i) for i in range(episodes)]},
             test={TASK: [dict(seed=(50000 if feedback_search else 30000 if staged else 100000) + i) for i in range(episodes)]}))
-        suite = Suite(python, root / "native" / ("round-" + str(context["index"])), resource=resource, gui=gui)
+        suite = Suite(python, root / "native" / ("round-" + str(context["index"])), resource=resource, gui=gui, cache_root=cache_root)
         declared = PreregisteredSuite(suite, protocol)
         stages = {}
         evaluator_class = ExperimentEvaluator
@@ -158,7 +161,7 @@ def setup(workspace, python, *, episodes=3, rounds=2, gui=False, device_registry
             # Development and screening can repeat one case/candidate. Native
             # directories must distinguish those separately charged executions.
             screening_suite = PreregisteredSuite(Suite(python, suite.root / "screening",
-                resource=resource, gui=gui), protocol)
+                resource=resource, gui=gui, cache_root=cache_root), protocol)
             screening = ExperimentEvaluator(suite=screening_suite, budgets={TASK:Budget(1,1200)}, scope=SCOPE,
                 system2=Revision("isaac-development-screening","1"),quota=quota,device_registry=registry,
                 max_replacements=max_replacements)

@@ -31,17 +31,38 @@ def contracts():
 
 
 class NativeWorker:
-    def __init__(self, python, root, *, gui=False):
+    def __init__(self, python, root, *, gui=False, cache_root=None):
         # Preserve a virtual environment's launcher path: resolving its symlink
         # would execute the base interpreter without the installed Isaac packages.
         self.python, self.root, self.gui = str(Path(python).expanduser().absolute()), Path(root).resolve(), gui
+        self.cache_root = Path(cache_root).resolve() if cache_root is not None else None
         self.process = None
 
     def identity(self):
         executable = Path(self.python)
         return dict(kind="isaac51-native-worker/v1", python=self.python,
                     executable_sha256=file_digest(executable), gui=self.gui,
+                    cache_root=str(self.cache_root) if self.cache_root is not None else None,
                     implementation=implementation(), assets=asset_identity())
+
+    def _prepare_cache(self):
+        """Link only derived Kit cache data; never merge existing runtime trees."""
+        if self.cache_root is None:
+            return self.root / "runtime"
+        target = (self.cache_root / "kit").resolve()
+        local_cache = self.root / "runtime/kit/cache"
+        if target.is_relative_to(local_cache) or local_cache.is_relative_to(target):
+            raise ValueError("Shared cache must be outside the local Kit cache")
+        if local_cache.is_symlink():
+            if local_cache.resolve() != target:
+                raise ValueError("Existing Kit cache points to a different shared cache")
+        elif local_cache.exists():
+            raise ValueError("Existing local Kit cache cannot be replaced by a shared cache")
+        target.mkdir(parents=True, exist_ok=True)
+        local_cache.parent.mkdir(parents=True, exist_ok=True)
+        if not local_cache.is_symlink():
+            local_cache.symlink_to(target, target_is_directory=True)
+        return self.cache_root
 
     def _wait(self, context, *, path=None):
         while True:
@@ -70,10 +91,12 @@ class NativeWorker:
                    PYTHONPATH=str(Path(__file__).resolve().parents[2]))
         if os.geteuid() == 0:
             env["OMNI_KIT_ALLOW_ROOT"] = "1"
+        cache = self._prepare_cache()
         for key, name in (("TMPDIR", "tmp"), ("XDG_CACHE_HOME", "cache"),
                           ("XDG_CONFIG_HOME", "config"), ("XDG_DATA_HOME", "data"),
                           ("CUDA_CACHE_PATH", "cuda-cache"), ("__GL_SHADER_DISK_CACHE_PATH", "gl-cache")):
-            path = self.root / "runtime" / name
+            base = cache if key in {"XDG_CACHE_HOME", "CUDA_CACHE_PATH", "__GL_SHADER_DISK_CACHE_PATH"} else self.root / "runtime"
+            path = base / name
             path.mkdir(parents=True, exist_ok=True)
             env[key] = str(path)
         icd = self.root / "runtime" / "nvidia-vulkan.json"
@@ -220,12 +243,13 @@ class Verifier:
 
 
 class Suite:
-    def __init__(self, python, root, *, resource="isaac-gpu-0", gui=False):
+    def __init__(self, python, root, *, resource="isaac-gpu-0", gui=False, cache_root=None):
         self.python, self.root, self.resource, self.gui = python, Path(root), resource, gui
+        self.cache_root = cache_root
         self._legacy = local()
 
     def identity(self):
-        return dict(kind="isaac-trial-suite/v1", worker=NativeWorker(self.python, self.root, gui=self.gui).identity(),
+        return dict(kind="isaac-trial-suite/v1", worker=NativeWorker(self.python, self.root, gui=self.gui, cache_root=self.cache_root).identity(),
                     resource=self.resource, scope=SCOPE, execution="native-isaacsim-5.1")
 
     def admit(self, candidate):
@@ -235,13 +259,13 @@ class Suite:
     def environment(self, task):
         if task != TASK:
             raise ValueError("Unknown Isaac task")
-        self._legacy.current = Environment(NativeWorker(self.python, self.root, gui=self.gui), self.resource)
+        self._legacy.current = Environment(NativeWorker(self.python, self.root, gui=self.gui, cache_root=self.cache_root), self.resource)
         return self._legacy.current
 
     def trial(self, candidate, task):
         if task != TASK:
             raise ValueError("Unknown Isaac task")
-        environment = Environment(NativeWorker(self.python, self.root, gui=self.gui), self.resource)
+        environment = Environment(NativeWorker(self.python, self.root, gui=self.gui, cache_root=self.cache_root), self.resource)
         return TrialAdapters(environment, Policy(candidate, environment), Verifier(environment))
 
     def policy(self, candidate, task):

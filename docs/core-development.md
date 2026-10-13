@@ -10,8 +10,8 @@ existence alone does not establish an effective improvement algorithm.
 | Priority | Deliverable | Required evidence | Current boundary |
 | --- | --- | --- | --- |
 | P0 | Evolvable state, common Trial/Evaluation, reliable rollback | Fixed components rejected before evaluation and at commit; raw rollout attribution; recover from damaged active artifacts; restart without repeated effects | Implemented for local files and the existing experiment runtime; provider-owned assets still require provider recovery |
-| P0 | Rollout-driven Self-Harness evolution | Changed proposals respond to observed transitions; fresh validation; independent final tests; cross-task integration; comparison with frozen/search controls on a native workload | CPU numerical and policy-gradient improvement across two action contracts and local native bounded-control improvement measured; native learned improvement, broad transfer and physical qualification remain unproven |
-| P1 | Candidate archive, asynchronous multi-fidelity evaluation and scheduling | Losing but useful branches remain retrievable; each fidelity has a distinct protocol; out-of-order completion cannot promote against a stale parent; resource reservations reconcile after worker loss | Owned branches, local asynchronous scheduling and development/full evaluation stages implemented; one bounded native staged study completed, while distributed resource backends remain unproven |
+| P0 | Rollout-driven Self-Harness evolution | Changed proposals respond to observed transitions; fresh validation; independent final tests; cross-task integration; comparison with frozen/search controls on a native workload | CPU numerical and policy-gradient improvement across two action contracts measured; native global-search improvement and archive-fitted second-round proposals measured; benefit from the fitted distribution, broad transfer and physical qualification remain unproven |
+| P1 | Candidate archive, asynchronous multi-fidelity evaluation and scheduling | Losing but useful branches remain retrievable; each fidelity has a distinct protocol; out-of-order completion cannot promote against a stale parent; resource reservations reconcile after worker loss | Owned branches, local asynchronous scheduling and development/full evaluation stages implemented; bounded native screening and archive reuse measured; distributed resource backends remain unproven |
 | P1 | Experience-to-skill compilation and versioned memory | Compiler binds development evidence to a skill's preconditions, implementation and checks; transfer succeeds on a second task; contradicted lessons suspend a skill revision | Owned experience, checked compilation, pinned runtime binding and memory suspension implemented; local transfer between two action contracts measured, broad/native transfer unproven |
 | P2 | Harness Tree, capability routing and retention | Select specialized branches by declared capability; evaluate unseen scenario shifts; retain old capability scores under a shared cost budget | Owned trees, public-observation routing and historical score floors implemented; local four-capability study measured, native and open-world scenario shifts remain unproven |
 | P2 | Optional RL/checkpoint evolver | External training job has resumable receipts; checkpoint is content-addressed; evaluation and rollback bind its complete dependencies; ordinary harness updates need no training backend | Explicit checkpoint transitions and durable provider jobs implemented; two CPU policy-gradient updates measured; native/GPU framework adapters and broad learned transfer remain unproven |
@@ -1626,3 +1626,90 @@ parameters, restart without repeated effects and a screening startup replacement
 They do not establish native performance or an advantage over uniform search.
 A native study must retain its frozen implementation, declared panels, raw rollout
 receipts and independently checked final measurements before making such claims.
+
+`shared_cache=True` is an opt-in startup optimization on both native research
+entry points. It gives all rounds and fidelity stages one workspace-local
+`native-cache` for Kit, CUDA, GL, Warp and other XDG cache data. Each worker keeps
+its own portable logs/data, configuration, temporary files, IPC and episode
+artifacts. The normal shared-device lease and one-worker scheduling still apply;
+this option does not reuse simulator processes or replay task observations.
+Direct `Suite` users can declare `cache_root` explicitly. Configure it before
+starting a workspace: existing local caches and conflicting links are rejected,
+not overwritten or migrated. The default remains isolated caches.
+
+This option has filesystem, adapter-contract and bounded native coverage.
+The completed two-round study below used the original isolated-cache
+configuration. A separate two-Trial shared-cache probe completed successfully;
+its observed timing is reported separately below.
+
+
+### Observed native adaptive-search closure, 2026-10-13
+
+`/cpfs02/user/yanming/physicalrsi-core-checks/native-empirical-search-002`
+completed with the frozen native adapter published in `da7fb89`. Its source
+manifest SHA-256 is
+`65394935919666e7f5fc2617e5e5426374c8cdaa2245f3056bd3493116fa4d9e`.
+The study declared development seed 1000, validation seeds 2026101301 and
+2026101302 in separate rounds, and final seed 2026101303 before execution.
+Sampler seed 20261013 generated two proposals per round.
+
+| Stage | Measured result | Decision |
+| --- | --- | --- |
+| Round 1 | Initial parameters `(0.13, 0.25)` failed; global proposal `(0.422, 0.309)` passed screening and the fresh paired case. Global proposal `(0.173, 0.171)` failed screening. | Inherit `(0.422, 0.309)` |
+| Round 2 | Inherited parameters succeeded again on development. Global proposal `(0.447, 0.172)` passed screening and validation, tying the incumbent. Elite proposal `(0.258, 0.219)` failed screening. | Retain incumbent; no additional gain |
+| Final test | Selected `(0.422, 0.309)` passed the one held-out case and all seven physical checks. | Report only; no further selection |
+
+The tuples are carrying height in metres and grasp-depth fraction. Round 2 fitted
+its proposal distribution using four verified development observations across
+three parameter vectors, including the rejected first-round candidate. The
+feedback audit matched each sample to its audited Trial and receipt identity;
+no validation or test observation was used for fitting. The two successful
+observations of the incumbent were grouped as repeat measurements of one vector.
+
+There were **11 completed Trials: 7 successes and 4 failures**, **17,336 physical
+steps**, and **11 charged reservations out of 14**. No replacement attempt was
+needed. The two-round study and final report took about 40 minutes 36 seconds.
+The shared device registry was empty after the driver exited. Raw receipts,
+videos and measurements remain under the study workspace. `measurement-audit.json`
+independently recomputed the intended-task checks from retained geometry for
+every completed Trial; `interim-audits/round-2-feedback-audit.json` records the
+feedback lineage, and `result.json` binds the final report and audit hash.
+
+This establishes the native loop from proposal through screening, independent
+validation, inheritance, archive-backed second-round fitting and final reporting.
+The first improving candidate came from global warmup; the fitted second-round
+proposals did not earn another promotion. One case per panel, one sampler seed
+and no matched uniform arm do **not** establish adaptive-search superiority,
+broad generalization, transferable skill acquisition or model-weight learning.
+
+
+### Observed shared native cache, 2026-10-13
+
+`/cpfs02/user/yanming/physicalrsi-core-checks/native-shared-cache-001`
+ran two sequential development Trials with the same seed 1000, the same
+`(0.422, 0.309)` policy, two different worker roots and one new shared cache.
+The source manifest SHA-256 is `82103697a3d4e5720b0cac7b5225a944796dcb787928b5bc61307a3e1f64e5e2`.
+
+| Measurement | First root, empty cache | Second root, reused cache |
+| --- | ---: | ---: |
+| Trial elapsed | 256.970 s | 175.838 s |
+| Runtime reset phase | 214.991 s | 133.989 s |
+| Runtime rollout phase | 40.499 s | 40.385 s |
+| Runtime verification phase | 0.104 s | 0.101 s |
+| Runtime finalization phase | 1.189 s | 1.175 s |
+| Sensor-frame warmup | 65.528 s / 194 renders | 5.824 s / 17 renders |
+| Shader-cache entries before launch | 0 | 61 |
+| Task result | Success, 7/7 checks | Success, 7/7 checks |
+
+Both Trials retained 1,576 physics steps, independently recomputed physical
+checks, distinct IPC and evidence directories, and the same shared Kit cache
+target. The two-reservation quota was fully charged, both worker processes
+exited, and the shared device registry was empty afterward. `result.json`,
+`cold-first-root.json` and `warm-second-root.json` bind the measured receipts,
+worker logs, cache observations and phase timings.
+
+The observed elapsed reduction was about 81 seconds (31.6%) in this pair.
+This is one sequential cold/warm pair on one known case, with no randomized
+control or repetition; OS caching and run-order effects are not separated.
+It establishes successful cross-root cache reuse with lower observed reset cost,
+not a general speedup guarantee. Shared caching remains explicitly opt-in.
