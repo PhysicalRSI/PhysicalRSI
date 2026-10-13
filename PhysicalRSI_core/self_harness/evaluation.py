@@ -36,9 +36,9 @@ class ExperimentSuite(Protocol):
 
 
 def freeze_json(path, value):
-    """Reuse an identical artifact; the caller owns serialization of writes."""
+    """Reuse an identical JSON artifact; the caller serializes concurrent writes."""
     if path.exists():
-        if read_json(path) != value:
+        if digest(read_json(path)) != digest(value):
             raise ValueError("Frozen evaluation artifact changed: " + str(path))
     else:
         atomic_json(path, value)

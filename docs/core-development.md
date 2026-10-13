@@ -75,6 +75,12 @@ Self-Harness checks actual component differences before admission; lineage
 checks again before inheritance. The separate `CheckpointEvolutionSpec` below
 defines a model transition contract; ordinary evolution keeps weights frozen.
 
+Frozen evaluation artifacts compare canonical JSON identities on reuse. Boolean,
+integer and floating-point values retain their distinct serialized identities;
+Python equality such as `True == 1` cannot acknowledge a changed request.
+Dictionary key order and tuple/list representations of the same JSON array
+remain equivalent. A mismatch leaves the original artifact unchanged.
+
 New `HarnessState` bootstrap and selection records own a snapshot under
 `state/snapshots/<content hash>/`. Files are copied, not hard-linked. Snapshot
 publication verifies content, synchronizes files/directories and atomically

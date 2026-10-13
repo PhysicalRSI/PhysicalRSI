@@ -61,3 +61,24 @@ def test_direct_evaluator_rejects_bad_comparison_before_sampling_or_reserving(tm
     assert comparison == original
     assert not output.exists() and suite.resets == []
     assert quota.status()["reserved_trials"] == 0
+
+
+@pytest.mark.parametrize('before,after', [(True, 1), (1, True), (1, 1.0), (False, 0)])
+def test_frozen_artifact_rejects_changed_json_type_without_overwriting(tmp_path, before, after):
+    from PhysicalRSI_core.self_harness.evaluation import freeze_json
+    path = tmp_path / 'frozen.json'
+    freeze_json(path, {'settings': {'value': before}})
+    original = path.read_bytes()
+    with pytest.raises(ValueError, match='Frozen evaluation artifact changed'):
+        freeze_json(path, {'settings': {'value': after}})
+    assert path.read_bytes() == original
+
+
+def test_frozen_artifact_accepts_equivalent_json_sequences_and_key_order(tmp_path):
+    from PhysicalRSI_core.self_harness.evaluation import freeze_json
+    path = tmp_path / 'frozen.json'
+    freeze_json(path, {'values': (1, True), 'name': 'same'})
+    original = path.read_bytes()
+    freeze_json(path, {'name': 'same', 'values': [1, True]})
+    freeze_json(path, {'values': (1, True), 'name': 'same'})
+    assert path.read_bytes() == original
