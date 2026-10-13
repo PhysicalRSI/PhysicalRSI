@@ -50,7 +50,8 @@ class Evaluation:
     def admit(self,candidate,output):
         memory=read_json(Path(candidate['root'])/'memory_rules.json')
         accepted=(read_json(Path(candidate['root'])/'dependencies.json')==implementation()
-                  and .10<=memory['transit_height_m']<=.55 and memory['sample_height_m']==.12)
+                  and .10<=memory['transit_height_m']<=.55 and memory['sample_height_m']==.12
+                  and .15<=memory.get('grasp_depth_fraction',.25)<=.40)
         return dict(accepted=accepted,freeze_sha256=verify_harness(candidate),
                     evidence={'implementation':implementation()},reason='Reviewed bounded code policy and fixed sensor/evaluator boundary')
     def execute(self,candidate,seed,output):
@@ -138,7 +139,7 @@ def create_seed(seed):
         value={'kind':kind,'protocol':PROTOCOL,'scope':SCOPE}
         if kind=='foundation':value={'agent':'Codex-authored reviewed code policy','weights':None}
         if kind=='dependencies':value=implementation()
-        if kind=='memory_rules':value={'transit_height_m':.13,'sample_height_m':.12}
+        if kind=='memory_rules':value={'transit_height_m':.13,'sample_height_m':.12,'grasp_depth_fraction':.25}
         if kind=='skills':value={'source':(Path(__file__).parent/'policy.py').read_text()}
         if kind=='tools':value={'inputs':['RGB','metric depth','calibration','proprioception'],
                                'privileged_scene_state_exposed':False,'policy_process_isolation_attested':False}

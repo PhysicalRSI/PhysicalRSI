@@ -87,3 +87,15 @@ def test_self_harness_selects_only_a_paired_gain(tmp_path,monkeypatch,child_impr
     assert state['revision']==result['selected_revision']
     cases=read_json(tmp_path/'round-001/cases.json')
     assert len(set(cases))==2 and 17 not in cases
+
+
+def test_grasp_fraction_changes_only_public_pick_depth_and_preserves_legacy_default():
+    public={name:dict(status='estimated_surface',center_xy=[.4,.2],top_z=z)
+            for name,z in [('tube',.13),('receiver',.02),('obstacle',.18)]}
+    memory=dict(transit_height_m=.34,sample_height_m=.12)
+    original=plan(public,memory)
+    assert plan(public,dict(memory,grasp_depth_fraction=.25))==original
+    changed=plan(public,dict(memory,grasp_depth_fraction=.4))
+    assert changed['pick']==[.4,.2,pytest.approx(.082)]
+    assert {k:v for k,v in changed.items() if k!='pick'}=={k:v for k,v in original.items() if k!='pick'}
+    assert memory==dict(transit_height_m=.34,sample_height_m=.12)

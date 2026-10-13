@@ -234,3 +234,125 @@ def test_clearance_feedback_requires_grasp_and_disturbance(aperture,disturbed,ex
         verdict=dict(measurements=dict(checks=dict(obstacle_undisturbed=not disturbed))),
         trajectory=[dict(native_rollout=[dict(phase=3,observation=dict(joint_positions=[0]*7+[aperture/2]*2))])])
     assert ClearanceFeedback().classify(value)==expected
+
+
+def test_native_empirical_contract_uses_complete_panels_and_two_mutable_parameters(tmp_path,monkeypatch):
+    from PhysicalRSI_demos.auto_engineering import empirical
+    monkeypatch.setattr(trials,'NativeWorker',ContractWorker)
+    ContractWorker.resets=[]
+    panels=dict(development=[1000,50001],validation=[[62000,62001],[62100,62101]],test=[63000,63001,63002])
+    result=empirical.run(tmp_path,sys.executable,panels=panels,strategy='adaptive',seed=20261013)
+    fits=[read_json(p) for p in sorted((tmp_path/'campaign/rounds').glob('*/execution/adaptive-fit.json'))]
+    assert len(fits)==2 and [f['model_ready'] for f in fits]==[False,True]
+    assert len(fits[0]['panel'])==len(fits[1]['panel'])==2
+    assert len(fits[1]['ranked'])==3
+    assert [p['role'] for p in fits[0]['proposals']]==['global','global']
+    assert [p['role'] for p in fits[1]['proposals']]==['global','elite']
+    assert all(len(p['values'])==2 and .1<=p['values'][0]<=.55 and .15<=p['values'][1]<=.4
+               for f in fits for p in f['proposals'])
+    assert all(s['case']['seed'] in {1000,50001} for f in fits for s in f['samples'])
+    assert result['quota']['max_trials']==27 and result['quota']['reserved_trials']==len(ContractWorker.resets)
+    assert result['qualification'] is None
+    before=len(ContractWorker.resets)
+    assert empirical.run(tmp_path,sys.executable,panels=panels,strategy='adaptive',seed=20261013)==result
+    assert len(ContractWorker.resets)==before
+    scheduler=read_json(tmp_path/'campaign/rounds/round-0001/execution/config.json')['identities']['evaluator']['scheduling']
+    assert scheduler['workers']==1
+    candidate=result['current']['harness']
+    assert read_json(Path(candidate['root'])/'memory_rules.json')['sample_height_m']==.12
+
+
+def test_native_objective_gives_partial_feedback_without_claiming_success():
+    from PhysicalRSI_demos.auto_engineering.empirical import Objective,CHECKS
+    value=dict(trial=dict(task=TASK,scope=SCOPE),outcome='failure',
+        verdict=dict(measurements=dict(checks={name:True for name in CHECKS})))
+    assert Objective().score(value)==.9
+    value['verdict']['measurements']['checks']['upright']=False
+    assert Objective().score(value)==pytest.approx(.9*6/7)
+    value['outcome']='success'
+    with pytest.raises(ValueError,match='contradicts'):
+        Objective().score(value)
+    value['verdict']['measurements']['checks']['upright']=True
+    assert Objective().score(value)==1
+    value['verdict']['measurements']['checks']['upright']=1
+    with pytest.raises(ValueError,match='boolean'):
+        Objective().score(value)
+    value['outcome']='uncertain'
+    assert Objective().score(value) is None
+
+
+@pytest.mark.parametrize('panels',[
+    dict(development=[1],validation=[[2],[2]],test=[3]),
+    dict(development=[1,1],validation=[[2]],test=[3]),
+    dict(development=[1],validation=[[2]],test=[1]),
+    dict(development=[True],validation=[[2]],test=[3]),
+    dict(development=[1],validation=[[2],[4,5]],test=[3]),
+])
+def test_native_empirical_rejects_ambiguous_panels_before_workspace_creation(tmp_path,panels):
+    from PhysicalRSI_demos.auto_engineering.empirical import setup
+    root=tmp_path/'unused'
+    with pytest.raises(ValueError):
+        setup(root,sys.executable,panels=panels,strategy='uniform',seed=1)
+    assert not root.exists()
+
+
+def test_empirical_screening_startup_recovery_preserves_search_and_budget(tmp_path, monkeypatch):
+    from PhysicalRSI_demos.auto_engineering import empirical
+
+    class InterruptedScreening(ContractWorker):
+        resets = []
+        failed = False
+
+        def reset(self, case, context):
+            if case['seed'] == 1000 and self.resets and not type(self).failed:
+                type(self).failed = True
+                self.resets.append(dict(case=case, candidate=context.harness_revision))
+                raise RuntimeError('screening worker stopped before readiness')
+            return super().reset(case, context)
+
+    monkeypatch.setattr(trials, 'NativeWorker', InterruptedScreening)
+    options = dict(panels=dict(development=[1000], validation=[[71000]], test=[72000]),
+                   strategy='adaptive', seed=20261013, max_replacements=1, extra_trials=1)
+    campaign, initial, quota = empirical.setup(tmp_path, sys.executable, **options)
+    with pytest.raises(RuntimeError, match='before readiness'):
+        campaign.run(initial)
+    directory = campaign.root / 'rounds/round-0001'
+    loop = campaign.build_loop(directory / 'execution', read_json(directory / 'context.json'))
+    evaluator = loop.evaluator
+    jobs = evaluator.scheduler.status()['jobs']
+    key = next(k for k, row in jobs.items() if row['state'] == 'needs_reconciliation')
+    candidate = jobs[key]['request']['payload']['candidate']
+    receipt = next(p for p in loop.root.glob('experiments/screening/**/receipt.json')
+                   if read_json(p)['state'] == 'needs_reconciliation')
+    saved = file_digest(receipt)
+    lease = read_json(receipt.parent / 'lease.json')
+    proof = tmp_path / 'stopped.json'
+    atomic_json(proof, dict(quiescent=True, scope='Synchronous contract double; no simulator launched'))
+    audit = dict(operator='contract-test', reason='Synchronous screening worker stopped',
+                 evidence={str(proof): file_digest(proof)})
+    registry = DeviceRegistry(tmp_path / 'devices')
+    registry.reconcile(lease['token'], **audit)
+    evaluator.authorize_screening_replacement(candidate, output=loop.root,
+        run_id=receipt.parent.name, quiescent=True, **audit)
+    evaluator.resume_screening_replacements(key, **audit)
+    result = empirical.run(tmp_path, sys.executable, **options)
+    assert result['status'] == 'completed'
+    assert result['final_test']['metrics'][TASK]['success_rate'] == 1
+    assert result['quota']['max_trials'] == 8
+    assert result['quota']['reserved_trials'] == len(InterruptedScreening.resets)
+    assert registry.occupied() == {} and evaluator.scheduler.status()['used'] == {'native_worker': 0}
+    assert file_digest(receipt) == saved
+    before = len(InterruptedScreening.resets)
+    assert empirical.run(tmp_path, sys.executable, **options) == result
+    assert len(InterruptedScreening.resets) == before
+
+
+@pytest.mark.parametrize('options', [dict(max_replacements=True), dict(max_replacements=11),
+                                    dict(extra_trials=-1), dict(extra_trials=1.5)])
+def test_empirical_recovery_options_rejected_before_workspace_creation(tmp_path, options):
+    from PhysicalRSI_demos.auto_engineering import empirical
+    root = tmp_path / 'unused'
+    with pytest.raises(ValueError, match='Trial'):
+        empirical.setup(root, sys.executable, panels=dict(development=[1], validation=[[2]], test=[3]),
+                        strategy='adaptive', seed=1, **options)
+    assert not root.exists()

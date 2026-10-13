@@ -1586,3 +1586,43 @@ artifact archives (154,814,518 compressed bytes) are retained at
 This is descriptive evidence from one software dynamics family, not native
 Isaac improvement, broad transfer or physical qualification. These final panels
 are now observed and must not be reused as untouched tests for later tuning.
+
+### Native two-parameter adaptive search
+
+`PhysicalRSI_demos.auto_engineering.empirical.setup` connects the common
+`AdaptiveParameterEvolver` to native Isaac Trials. It searches carrying height
+(0.10–0.55 m) and grasp depth (0.15–0.40 of the declared sample height). Existing
+policies without the new depth field retain the 0.25 default. Perception,
+controller code, task geometry and the seven intended-task checks stay frozen.
+
+```python
+from PhysicalRSI_demos.auto_engineering.empirical import run
+result = run(
+    workspace, isaac_python, strategy="adaptive", seed=20261013, population=2,
+    panels={"development": [1000], "validation": [[71000], [71100]], "test": [72000]},
+    device_registry=shared_device_registry, resource="isaac-gpu-0",
+    max_replacements=1, extra_trials=1,
+)
+```
+
+Declare panels before running. Development can be reused across rounds; validation
+panels are disjoint by round, and final seeds are withheld. Only completed
+development measurements reach the search objective: success scores 1, and a
+failure scores 0.9 times the fraction of satisfied checks. Uncertain/invalid
+outcomes are excluded. Whole comparable case panels, at least three parameter
+vectors and observed score contrast are required before elite proposals begin.
+Uniform mode uses the same parameter bounds, screening and full-validation gates.
+Screening only admits candidates; full paired validation controls inheritance.
+
+The returned campaign exposes `status`; final results remain separately under
+`final_test`. Search diagnostics are retained as `adaptive-fit.json` in each
+round. The archive carries the measured proposal history into subsequent rounds.
+Both fidelity stages receive the declared replacement allowance, with additional
+attempts charged to the shared quota. Use the explicit screening or full-validation
+recovery API for the interrupted stage; no automatic retry is enabled.
+
+Contract-double tests cover two-round feedback reuse, independent cases, bounded
+parameters, restart without repeated effects and a screening startup replacement.
+They do not establish native performance or an advantage over uniform search.
+A native study must retain its frozen implementation, declared panels, raw rollout
+receipts and independently checked final measurements before making such claims.

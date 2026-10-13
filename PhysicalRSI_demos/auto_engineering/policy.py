@@ -10,8 +10,8 @@ def plan(observation, memory):
             raise ValueError('Required visual detection missing: '+name)
     tube,goal = observation['tube'],observation['receiver']
     # Tube dimensions are the declared sample specification, not object state.
-    # Grip the upper quarter so the palm clears a tall upright sample.
-    pick = [*tube['center_xy'], tube['top_z']-memory['sample_height_m']*.25]
+    # Default to the upper quarter; bounded search can vary the grasp depth.
+    pick = [*tube['center_xy'], tube['top_z']-memory['sample_height_m']*memory.get('grasp_depth_fraction',.25)]
     place = [*goal['center_xy'], goal['top_z']+memory['sample_height_m']*.75]
     return dict(pick=pick, place=place, transit_height_m=memory['transit_height_m'],
                 perception=observation, source='RGB-D color detection',

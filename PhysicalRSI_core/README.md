@@ -233,3 +233,7 @@ default remains diagonal sampling; fit records include the matrix and factor.
 The ten-seed covariance comparison found only a small mean gain over diagonal
 sampling at higher Trial cost; uniform search remained slightly stronger and
 cheaper. This optional mode does not establish a general performance advantage.
+
+The native [two-parameter search adapter](../PhysicalRSI_demos/auto_engineering/empirical.py)
+uses the same adaptive evolver, archive, screening and paired-validation ports.
+See [configuration and evidence boundaries](../docs/core-development.md#native-two-parameter-adaptive-search).
