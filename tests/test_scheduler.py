@@ -335,3 +335,54 @@ def test_handler_change_after_claim_stops_execution_and_keeps_reservation(tmp_pa
     assert status['jobs'][key]['state'] == 'needs_reconciliation'
     assert not status['jobs'][key]['owner_active']
     assert status['used'] == {'cpu': 1}
+
+
+def test_observation_scan_checks_handler_once_for_all_waiting_jobs(tmp_path, monkeypatch):
+    import PhysicalRSI_core.infra.scheduler as module
+    scheduler = JobScheduler(tmp_path / 'queue', capacities={'cpu': 1})
+    handler = FileHandler(tmp_path / 'effects')
+    ids = scheduler.submit([dict(name=str(i)) for i in range(64)],
+                           handler=handler, resources={'cpu': 1})
+    identity = handler.identity
+    observations = []
+
+    def observe():
+        observations.append(True)
+        return identity()
+
+    monkeypatch.setattr(handler, 'identity', observe)
+    times = iter([0., 2.])
+    monkeypatch.setattr(module, 'monotonic', lambda: next(times))
+    with pytest.raises(TimeoutError, match='Observation deadline'):
+        scheduler.run_until(ids, handler, wait_seconds=1.)
+    assert len(observations) == 1
+    assert not handler.root.exists()
+    assert all(row['state'] == 'queued' for row in scheduler.status(ids)['jobs'].values())
+
+
+def test_observation_scan_rechecks_handler_on_next_poll(tmp_path, monkeypatch):
+    scheduler = JobScheduler(tmp_path / 'queue', capacities={'cpu': 1})
+    handler = FileHandler(tmp_path / 'effects')
+    holder, target = scheduler.submit([dict(name='holder'), dict(name='target')],
+                                      handler=handler, resources={'cpu': 1})
+    claim = scheduler._claim(handler, [holder])
+    status = scheduler.status
+    scans = []
+    original = handler.root
+
+    def observe(ids=None):
+        view = status(ids)
+        scans.append(True)
+        if len(scans) == 2:
+            handler.root = tmp_path / 'changed-effects'
+        return view
+
+    monkeypatch.setattr(scheduler, 'status', observe)
+    try:
+        with pytest.raises(ValueError, match='handler identity changed'):
+            scheduler.run_until([target], handler)
+        assert len(scans) == 2
+        assert not original.exists() and not handler.root.exists()
+        assert status([target])['jobs'][target]['state'] == 'queued'
+    finally:
+        claim[2].close()

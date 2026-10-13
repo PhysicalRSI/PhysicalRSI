@@ -646,6 +646,13 @@ allocations. All cooperating controllers must share one queue on one POSIX
 host. Suite factories must create independent adapters and support concurrent
 calls. Physical device ownership still requires the runtime's `DeviceRegistry`;
 a queue reservation does not replace its leases or native cleanup.
+Each observation scan checks one shared handler identity against every selected
+request, while subsequent scans and callback boundaries revalidate it. A local
+CPFS microbenchmark with 64 waiting jobs and the native Isaac Suite identity
+reduced identity observations from 64 to 1 and median scan time from 1.811 s to
+0.852 s (five alternating pairs after one warmup pair). Jobs remained queued;
+this measures observation overhead, not native rollout or end-to-end speedup.
+Evidence: `physicalrsi-core-checks/core-scheduler-observation-001/benchmark.json`.
 Queue identities use canonical JSON comparison, and Trial quota ledgers require
 integer allowances when read as well as when created. Boolean or floating-point
 substitutions for integer capacities/allowances stop reopening and dispatch or

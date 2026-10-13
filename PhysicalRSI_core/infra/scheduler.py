@@ -309,8 +309,10 @@ class JobScheduler:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             while True:
                 view = self.status(ids)["jobs"]
+                handler_sha = digest(_json(handler.identity()))
                 for key, job in view.items():
-                    self._handler(job["request"], handler)
+                    if digest(job["request"]["handler"]) != handler_sha:
+                        raise ValueError("Scheduled handler identity changed")
                     if job["state"] == "abandoned":
                         raise ReconciliationRequired("Scheduled job was abandoned: " + key)
                     if job["state"] == "completed" and key not in checked:
