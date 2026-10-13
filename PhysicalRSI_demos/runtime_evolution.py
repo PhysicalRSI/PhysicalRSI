@@ -24,7 +24,7 @@ from PhysicalRSI_core.infra.storage import atomic_json, digest, file_digest, rea
 from PhysicalRSI_core.infra.trajectory import EpisodeWriter, validate_episode
 from PhysicalRSI_core.lineage import HarnessState
 from PhysicalRSI_core.self_harness import SelfHarness, now, selection
-from PhysicalRSI_core.self_harness.artifacts import CLOSURE, verify_harness
+from PhysicalRSI_core.self_harness.artifacts import CLOSURE, bind_harness_modes, verify_harness
 
 SCOPE = "local_counter_service_contract; no physical qualification"
 PROTOCOL = "counter-service-v1"
@@ -41,7 +41,7 @@ def implementation():
 
 
 def manifest(root, name, **metadata):
-    return dict(
+    return bind_harness_modes(dict(
         id=name,
         root=str(root),
         components={
@@ -49,7 +49,7 @@ def manifest(root, name, **metadata):
             for kind in CLOSURE
         },
         **metadata,
-    )
+    ))
 
 
 class Evaluation:

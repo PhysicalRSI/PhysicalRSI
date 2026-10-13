@@ -14,7 +14,7 @@ from PhysicalRSI_core.infra.storage import atomic_json, file_digest, read_json
 from PhysicalRSI_core.infra.trial_quota import TrialQuota
 from PhysicalRSI_core.lineage import HarnessState
 from PhysicalRSI_core.self_harness import SelfHarness, selection
-from PhysicalRSI_core.self_harness.artifacts import CLOSURE, verify_harness
+from PhysicalRSI_core.self_harness.artifacts import CLOSURE, bind_harness_modes, verify_harness
 from PhysicalRSI_core.self_harness.evaluation import ExperimentEvaluator
 from PhysicalRSI_core.self_harness.protocol import CaseProtocol, PreregisteredSuite
 from PhysicalRSI_core.self_harness.research_campaign import ResearchCampaign
@@ -27,8 +27,8 @@ def identity(kind):
 
 
 def manifest(root, name, **metadata):
-    return dict(id=name, root=str(root), components={
-        kind: {kind + ".json": file_digest(root / (kind + ".json"))} for kind in CLOSURE}, **metadata)
+    return bind_harness_modes(dict(id=name, root=str(root), components={
+        kind: {kind + ".json": file_digest(root / (kind + ".json"))} for kind in CLOSURE}, **metadata))
 
 
 TEXT_OBSERVATION = Contract("text-prefix-and-target", embodiment="software-text")

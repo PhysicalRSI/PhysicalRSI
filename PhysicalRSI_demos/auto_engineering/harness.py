@@ -10,7 +10,7 @@ import sys
 from PhysicalRSI_core.infra.storage import atomic_json, digest, file_digest, read_json
 from PhysicalRSI_core.lineage import HarnessState
 from PhysicalRSI_core.self_harness import SelfHarness, now, selection
-from PhysicalRSI_core.self_harness.artifacts import CLOSURE, verify_harness
+from PhysicalRSI_core.self_harness.artifacts import CLOSURE, bind_harness_modes, verify_harness
 from .task import TASK, SCOPE, layout
 from .policy import propose_repair
 
@@ -25,7 +25,7 @@ def implementation():
 def manifest(root,name,**extra):
     components={k:{k+'.json':file_digest(root/(k+'.json'))} for k in CLOSURE}
     components['dependencies'].update({str(p.relative_to(root)):file_digest(p) for p in sorted((root/'source').glob('*.py'))})
-    return dict(id=name,root=str(root),components=components,**extra)
+    return bind_harness_modes(dict(id=name,root=str(root),components=components,**extra))
 
 
 def verify_episode(path):

@@ -14,7 +14,7 @@ import tempfile
 from .contracts import Contract, Operation
 from .infra.owned_files import OwnedFiles, physical
 from .infra.storage import atomic_json, digest, file_digest, identifier, locked, read_json, relative_path
-from .self_harness.artifacts import HarnessSnapshots, verify_harness
+from .self_harness.artifacts import HarnessSnapshots, bind_harness_modes, harness_identity, verify_harness
 from .self_harness.experience import DevelopmentExperience
 from .skills import operation_identity
 
@@ -119,7 +119,7 @@ class CheckpointStore:
         audited = self.experiences.read_with_record(request["experience_revision"])
         values = audited["evaluations"]
         source = audited["record"]["metadata"]["parent"]
-        if digest(dict(components=source["components"])) != request["parent_harness_sha256"]:
+        if digest(harness_identity(source)) != request["parent_harness_sha256"]:
             raise ValueError("Training source differs from the frozen parent")
         if request["binding_path"] not in source["components"]["weights"]:
             raise ValueError("Training source has no declared model binding")
@@ -160,7 +160,7 @@ class CheckpointStore:
         if owned.root.is_relative_to(self.root) or self.root.is_relative_to(owned.root):
             raise ValueError("Materialize inference bundles outside the checkpoint store")
         root = self.checkpoints.folder(revision) / "files"
-        copied = owned.capture(record["metadata"], {name:dict(path=str(root / name),sha256=sha) for name,sha in record["files"].items()})
+        copied = owned.capture(record["metadata"], {name:dict(path=str(root / name),sha256=sha) for name,sha in record["files"].items()}, bind_modes=record["schema"] == "physicalrsi.owned-files/v2")
         if copied != revision:
             raise ValueError("Copied checkpoint identity changed")
         return owned.folder(copied)
@@ -213,6 +213,8 @@ class CheckpointStore:
         """Publish an owned candidate, changing only the declared weights component."""
         identifier(candidate_id)
         relative_path(binding_path)
+        if set(provenance) & {'id', 'root', 'components', 'file_modes'}:
+            raise ValueError('Checkpoint provenance cannot replace harness identity fields')
         parent_sha = verify_harness(parent)
         self.read(revision)
         output = Path(output).resolve()
@@ -229,8 +231,10 @@ class CheckpointStore:
                 child = read_json(manifest_path)
                 binding = self.binding(child, binding_path=binding_path)
                 if (binding["revision"] != revision or child.get("id") != candidate_id or child.get("root") != str(target)
-                        or set(child) != {"id", "root", "components", *provenance}
+                        or set(child) != {"id", "root", "components", *provenance, *({"file_modes"} if "file_modes" in parent else set())}
                         or any(child.get(k) != v for k,v in provenance.items())
+                        or any(child.get("file_modes", {}).get(n) != parent.get("file_modes", {}).get(n)
+                               for kind, entries in parent["components"].items() if kind != "weights" for n in entries)
                         or any(child["components"][kind] != entries for kind,entries in parent["components"].items()
                                if kind != "weights")):
                     raise ValueError("Published checkpoint candidate differs from its installation request")
@@ -255,6 +259,10 @@ class CheckpointStore:
                     for p in package.rglob("*") if p.is_file()}
                 components["weights"][binding_path] = file_digest(temporary / binding_path)
                 child = dict(provenance, id=candidate_id, root=str(temporary), components=components)
+                if "file_modes" in parent:
+                    child = bind_harness_modes(child)
+                    if any(child['file_modes'][n] != parent['file_modes'][n] for n in fixed):
+                        raise ValueError('Checkpoint installation changed a fixed file mode')
                 self.binding(child, binding_path=binding_path)
                 verify_harness(parent)
                 for path in temporary.rglob("*"):

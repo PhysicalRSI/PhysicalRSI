@@ -14,7 +14,7 @@ import math
 from pathlib import Path
 
 from ..infra.storage import canonical, digest, file_digest, relative_path
-from .artifacts import CLOSURE, verify_harness
+from .artifacts import CLOSURE, harness_identity, verify_harness
 from .search_space import materialize
 from .evaluation import freeze_json
 
@@ -71,7 +71,7 @@ class ScalarParameter:
         self.assign(fixed, {'physicalrsi.scalar-slot/v1': True})
         components = deepcopy(candidate['components'])
         components[self.component][self.file] = digest(fixed)
-        return dict(value=value, document=document, condition_sha256=digest(components))
+        return dict(value=value, document=document, condition_sha256=digest(harness_identity(dict(candidate,components=components))))
 
     def assign(self, document, value):
         node = document

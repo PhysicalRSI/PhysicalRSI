@@ -65,7 +65,8 @@ class SkillLibrary:
             raise ValueError("Materialize the candidate package outside the skill library")
         folder = self.skills.folder(revision) / "files"
         copied = owned.capture(record["metadata"],
-            {name: dict(path=str(folder / name), sha256=sha) for name, sha in record["files"].items()})
+            {name: dict(path=str(folder / name), sha256=sha) for name, sha in record["files"].items()},
+            bind_modes=record['schema'] == 'physicalrsi.owned-files/v2')
         if copied != revision:
             raise ValueError("Materialized skill identity changed")
         return owned.folder(copied)

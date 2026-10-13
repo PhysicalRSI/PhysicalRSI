@@ -47,7 +47,7 @@ class PolicyLibrary:
             raise ValueError("Reusable memory must be an object")
         use_physicalrsi()
         from PhysicalRSI_core.infra.storage import file_digest
-        from PhysicalRSI_core.self_harness.artifacts import CLOSURE, verify_harness
+        from PhysicalRSI_core.self_harness.artifacts import CLOSURE, bind_harness_modes, verify_harness
         files = dependency_files()
         dependency_hashes = {name: file_digest(p) for name, p in files.items()}
         identity = digest(dict(task=task.public(), source=source, memory=memory,
@@ -85,13 +85,13 @@ class PolicyLibrary:
         for name, path in files.items():
             target = root / name
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(path, target)
+            shutil.copy2(path, target)
         manifest = dict(id=root.name, root=str(root), components={
             kind: {kind + ".json": file_digest(root / (kind + ".json"))} for kind in components})
         manifest["components"]["skills"]["policy.py"] = file_digest(root / "policy.py")
         manifest["components"]["memory_rules"]["memory.json"] = file_digest(root / "memory.json")
         manifest["components"]["dependencies"].update(dependency_hashes)
-        verify_harness(manifest)
+        manifest = bind_harness_modes(manifest)
         write_new(manifest_path, manifest)
         return manifest
 

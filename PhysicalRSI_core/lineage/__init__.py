@@ -14,7 +14,7 @@ from PhysicalRSI_core.infra.storage import (
     locked,
     read_json,
 )
-from PhysicalRSI_core.self_harness.artifacts import EvolutionSpec, HarnessSnapshots, _HarnessReadAudit, verify_harness
+from PhysicalRSI_core.self_harness.artifacts import EvolutionSpec, HarnessSnapshots, _HarnessReadAudit, harness_identity, verify_harness
 
 
 class StateConflict(ValueError):
@@ -210,6 +210,11 @@ class HarnessState:
                 != current["harness"]["components"]["foundation"]
             ):
                 raise ValueError("Foundation F changed")
+            if ('file_modes' in survivor) != ('file_modes' in current['harness']):
+                raise ValueError('Selection cannot add or drop file_modes')
+            if any(survivor.get('file_modes', {}).get(n) != current['harness'].get('file_modes', {}).get(n)
+                   for n in survivor['components']['foundation']):
+                raise ValueError('Foundation file mode changed')
             if "evolution" in current["policy"]:
                 EvolutionSpec.from_identity(current["policy"]["evolution"]).compare(current["harness"], survivor)
             if not evidence:
@@ -313,7 +318,7 @@ class HarnessState:
                 seen.add(current)
                 current = self._metadata(current)["previous"]
             record = self._metadata(revision)
-            if digest(dict(components=record["harness"]["components"])) != record["freeze_sha256"]:
+            if digest(harness_identity(record["harness"])) != record["freeze_sha256"]:
                 raise ValueError("Snapshot restoration declaration changed")
             return self.snapshots.restore(record["harness"], source,
                 operation=dict(expected_head=expected, target_revision=revision, reason=reason,

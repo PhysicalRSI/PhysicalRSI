@@ -58,6 +58,8 @@ class BranchEvolver:
             if task not in failed:
                 updated[task] = coefficient
         atomic_json(Path(child["root"]) / "control.json", updated)
+        if 'file_modes' in child:
+            (Path(child['root']) / 'control.json').chmod(child['file_modes']['control.json'])
         child["components"]["control"]["control.json"] = file_digest(Path(child["root"]) / "control.json")
         child.update(changes=dict(control=updated), hypothesis="Compose the archived specialist with successful incumbent controls",
             expected_effect="Recover the missing task without losing the incumbent's capability",

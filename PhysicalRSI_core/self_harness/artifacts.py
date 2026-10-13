@@ -33,6 +33,44 @@ CLOSURE = {
 }
 
 
+def harness_identity(h):
+    """Declared identity, usable even when physical inputs need repair.
+
+    Historical declarations without file_modes retain their byte-only identity.
+    New mode declarations cover every file and bind regular POSIX permission bits.
+    """
+    components = h['components']
+    if (not isinstance(components, dict) or set(components) != CLOSURE
+            or any(not isinstance(files, dict) or not files for files in components.values())):
+        raise ValueError('Incomplete F/H component declaration')
+    value = dict(components=deepcopy(components))
+    if 'file_modes' in h:
+        modes = h['file_modes']
+        names = {n for files in h['components'].values() for n in files}
+        if (not isinstance(modes, dict) or set(modes) != names
+                or any(type(m) is not int or not 0 <= m <= 0o777 for m in modes.values())):
+            raise ValueError('Declare exact file_modes coverage with POSIX permission bits')
+        if any(str(relative_path(n)) != n for n in names):
+            raise ValueError('Mode-bound file names must be canonical')
+        value['file_modes'] = deepcopy(modes)
+    return value
+
+
+def bind_harness_modes(h):
+    """Explicitly bind modes of verified source files before freezing a new run.
+
+    Never rebind an existing declaration to hide drift. Ownership, directory
+    permissions, ACLs and the operating-system environment are provider inputs.
+    """
+    verify_harness(h)
+    value = deepcopy(h)
+    if 'file_modes' not in value:
+        value['file_modes'] = {n: stat.S_IMODE((Path(h['root']) / n).stat().st_mode)
+                              for files in h['components'].values() for n in files}
+    verify_harness(value)
+    return value
+
+
 def verify_harness(h):
     """Verify all declared physical inputs, including referenced asset manifests.
 
@@ -41,6 +79,7 @@ def verify_harness(h):
     physical verification must be performed by the dependency_closure gate.
     """
     identifier(h["id"])
+    identity = harness_identity(h)
     source_root = Path(h["root"])
     if source_root.is_symlink() or not source_root.is_dir():
         raise ValueError("Harness root must be a physical directory")
@@ -61,7 +100,9 @@ def verify_harness(h):
             p = declared.resolve()
             if not p.is_relative_to(root) or not p.is_file() or file_digest(p) != sha:
                 raise ValueError(f"Changed or missing harness input: {name}")
-    return digest({"components": h["components"]})
+            if 'file_modes' in identity and stat.S_IMODE(p.stat().st_mode) != identity['file_modes'][name]:
+                raise ValueError(f"Changed harness file mode: {name}")
+    return digest(identity)
 
 
 class _HarnessReadAudit:
@@ -76,7 +117,7 @@ class _HarnessReadAudit:
 
     def verify(self, harness):
         identifier(harness["id"])
-        revision = digest(dict(components=harness["components"]))
+        revision = digest(harness_identity(harness))
         key = (str(harness["root"]), revision)
         if key not in self.checked:
             if verify_harness(harness) != revision:
@@ -120,13 +161,19 @@ class EvolutionSpec:
     def compare(self, parent, child):
         verify_harness(parent)
         verify_harness(child)
-        changed = {kind: sorted(set(parent["components"][kind]) | set(child["components"][kind]))
-                   for kind in CLOSURE if parent["components"][kind] != child["components"][kind]}
+        if ('file_modes' in parent) != ('file_modes' in child):
+            raise ValueError('Evolution cannot add or drop file_modes; bind before a new lineage')
+        changed = {}
+        for kind in CLOSURE:
+            names = sorted(set(parent['components'][kind]) | set(child['components'][kind]))
+            differences = [n for n in names if parent['components'][kind].get(n) != child['components'][kind].get(n)
+                           or parent.get('file_modes', {}).get(n) != child.get('file_modes', {}).get(n)]
+            if differences:
+                changed[kind] = differences
         if not set(changed) <= set(self.mutable):
             raise ValueError("Candidate changed fixed evolution components: "
                              + ", ".join(sorted(set(changed) - set(self.mutable))))
-        return {kind: [name for name in names if parent["components"][kind].get(name)
-                      != child["components"][kind].get(name)] for kind, names in sorted(changed.items())}
+        return dict(sorted(changed.items()))
 
 
 class HarnessSnapshots:
@@ -201,9 +248,9 @@ class HarnessSnapshots:
         capture remains strict and never triggers this operation implicitly.
         """
         harness, source, operation = deepcopy(harness), deepcopy(source), deepcopy(operation)
-        revision = digest(dict(components=harness["components"]))
+        revision = digest(harness_identity(harness))
         target = self.root / revision
-        if Path(harness["root"]) != target or source["components"] != harness["components"]:
+        if Path(harness["root"]) != target or harness_identity(source) != harness_identity(harness):
             raise ValueError("Restore requires an owned snapshot and its exact declared closure")
         source_root = Path(source["root"]).resolve()
         repairs = self.root.parent / "snapshot-repairs"

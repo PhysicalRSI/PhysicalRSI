@@ -78,25 +78,28 @@ def test_archive_owns_candidate_and_evidence_after_original_round_loss(tmp_path,
     child = archive.fork(view, first["revision"], "specialist-axis", parent=result["current"]["harness"],
         output=tmp_path / "recovered-proposal", name="recovered", evolution=EvolutionSpec(("control",)))
     assert verify_harness(child) == row["freeze_sha256"]
+    assert child['file_modes'] == row['harness']['file_modes']
     assert child["parent_sha256"] == result["current"]["freeze_sha256"]
     (Path(child["root"]) / "control.json").write_text("edited locally")
     assert archive.read(first["revision"]) == first
 
 
-@pytest.mark.parametrize("damage", ["candidate", "evidence", "extra", "symlink"])
+@pytest.mark.parametrize("damage", ["candidate", "mode", "evidence", "extra", "symlink"])
 def test_archive_damage_is_detected_on_read_and_campaign_resume(tmp_path, damage):
     campaign, initial, _, _ = calibration_setup(tmp_path)
     campaign.run(initial)
     archive, entries = archive_entries(tmp_path)
     entry = entries[0]
     folder = archive.root / "entries" / entry["revision"] / "evidence"
-    if damage == "candidate":
+    if damage in {"candidate", "mode"}:
         path = Path(next(iter(entry["candidates"].values()))["harness"]["root"]) / "control.json"
     elif damage == "extra":
         path = folder / "unexpected.bin"
     else:
         path = folder / next(name for name in entry["files"] if name.endswith("trajectory.json"))
-    if damage == "symlink":
+    if damage == "mode":
+        path.chmod(0o755)
+    elif damage == "symlink":
         saved = tmp_path / "same-bytes.json"
         shutil.copyfile(path, saved)
         path.unlink()

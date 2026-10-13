@@ -13,7 +13,11 @@ import tempfile
 from .embodiment import Dependency, System1
 from .infra.owned_files import OwnedFiles, physical
 from .infra.storage import atomic_json, digest, file_digest, identifier, read_json, relative_path
-from .self_harness.artifacts import CLOSURE, EvolutionSpec, verify_harness
+from .self_harness.artifacts import CLOSURE, EvolutionSpec, bind_harness_modes, harness_identity, verify_harness
+
+
+def _object_path(kind, sha, mode=None):
+    return 'objects/' + kind + '/' + sha + ('' if mode is None else '-' + format(mode, '03o'))
 
 
 def _shape(nodes, keys, root):
@@ -73,6 +77,7 @@ class HarnessTree:
         _shape(nodes, keys, root)
         output = Path(output).resolve()
         anchor = nodes[root]["harness"]
+        bound_modes = 'file_modes' in anchor
         for row in nodes.values():
             evolution.compare(anchor, row["harness"])
             source = Path(row["harness"]["root"]).resolve()
@@ -93,11 +98,14 @@ class HarnessTree:
                     references[kind] = reference
                     for logical, sha in files.items():
                         path = physical(Path(row["harness"]["root"]), logical)
-                        target = "objects/" + kind + "/" + sha
+                        mode = row['harness'].get('file_modes', {}).get(logical)
+                        target = _object_path(kind, sha, mode)
                         exports[target] = dict(path=str(path), sha256=sha)
                         components[kind][target] = sha
                 records[node] = dict(parent=row["parent"], when=row["when"], components=references)
-            tree = dict(schema="physicalrsi.harness-tree/v1", root=root, keys=keys, nodes=records,
+                if bound_modes:
+                    records[node]['file_modes'] = deepcopy(row['harness']['file_modes'])
+            tree = dict(schema="physicalrsi.harness-tree/v2" if bound_modes else "physicalrsi.harness-tree/v1", root=root, keys=keys, nodes=records,
                         evolution=evolution.identity(), implementation=file_digest(Path(__file__)))
             atomic_json(temporary / "tree.json", tree)
             sha = file_digest(temporary / "tree.json")
@@ -106,6 +114,8 @@ class HarnessTree:
             owned = OwnedFiles(output)
             revision = owned.capture(dict(schema="physicalrsi.tree-package/v1", components=components), exports)
             candidate = dict(id=name, root=str(owned.folder(revision) / "files"), components=components)
+            if bound_modes:
+                candidate = bind_harness_modes(candidate)
             HarnessTree(candidate)
             return candidate
         finally:
@@ -117,15 +127,18 @@ class HarnessTree:
         self.root = Path(candidate["root"])
         body = read_json(physical(self.root, "tree.json"))
         if (set(body) != {"schema", "root", "keys", "nodes", "evolution", "implementation"}
-                or body["schema"] != "physicalrsi.harness-tree/v1"
+                or body["schema"] not in {"physicalrsi.harness-tree/v1", "physicalrsi.harness-tree/v2"}
                 or body["implementation"] != file_digest(Path(__file__))):
             raise ValueError("Unknown or changed harness tree implementation")
         self.children = _shape(body["nodes"], body["keys"], body["root"])
         evolution = EvolutionSpec.from_identity(body["evolution"])
+        bound_modes = body['schema'].endswith('/v2')
+        if bound_modes != ('file_modes' in candidate):
+            raise ValueError('Tree and candidate file mode declarations differ')
         components, leaves = {kind: {} for kind in CLOSURE}, {}
         components["skill_selection"]["tree.json"] = file_digest(self.root / "tree.json")
         for node, row in body["nodes"].items():
-            if set(row) != {"parent", "when", "components"} or set(row["components"]) != CLOSURE:
+            if set(row) != {"parent", "when", "components", *({'file_modes'} if bound_modes else set())} or set(row["components"]) != CLOSURE:
                 raise ValueError("Incomplete tree node closure")
             leaf, aliases = {}, {}
             for kind, reference in row["components"].items():
@@ -137,20 +150,34 @@ class HarnessTree:
                     if str(relative_path(logical)) != logical or (logical in aliases and aliases[logical] != sha):
                         raise ValueError("Conflicting or noncanonical branch file names")
                     aliases[logical] = sha
-                    path = "objects/" + kind + "/" + sha
+                    mode = row.get('file_modes', {}).get(logical)
+                    path = _object_path(kind, sha, mode)
                     if file_digest(physical(self.root, path)) != sha:
                         raise ValueError("Tree branch bytes changed")
+                    if bound_modes and candidate['file_modes'][path] != mode:
+                        raise ValueError('Tree branch file mode differs from its declaration')
                     components[kind][path] = sha
                 leaf[kind] = files
             leaves[node] = leaf
+            if bound_modes:
+                harness_identity(dict(components=leaf, file_modes=row['file_modes']))
         for node, leaf in leaves.items():
             if any(leaf[kind] != leaves[body["root"]][kind] for kind in CLOSURE - set(evolution.mutable)):
                 raise ValueError("Branch changed a fixed component")
+            if bound_modes and any(body['nodes'][node]['file_modes'][n] != body['nodes'][body['root']]['file_modes'][n]
+                    for kind in CLOSURE - set(evolution.mutable) for n in leaf[kind]):
+                raise ValueError('Branch changed a fixed component file mode')
         actual = {str(p.relative_to(self.root)) for p in self.root.rglob("*") if p.is_file() or p.is_symlink()}
         if (components != candidate["components"]
                 or actual != {p for files in components.values() for p in files}):
             raise ValueError("Tree closure differs from its declared components")
         self.body, self.leaves = body, leaves
+
+    def leaf_identity(self, node):
+        value = dict(components=deepcopy(self.leaves[node]))
+        if 'file_modes' in self.body['nodes'][node]:
+            value['file_modes'] = deepcopy(self.body['nodes'][node]['file_modes'])
+        return harness_identity(value)
 
     def route(self, capabilities):
         if (not isinstance(capabilities, dict) or set(capabilities) != set(self.body["keys"])
@@ -174,10 +201,13 @@ class HarnessTree:
         if owned.root.is_relative_to(self.root) or self.root.is_relative_to(owned.root):
             raise ValueError("Materialize outside the frozen tree")
         components = self.leaves[node]
-        exports = {name: dict(path=str(self.root / "objects" / kind / sha), sha256=sha)
+        modes = self.body['nodes'][node].get('file_modes', {})
+        exports = {name: dict(path=str(self.root / _object_path(kind, sha, modes.get(name))), sha256=sha)
                    for kind, files in components.items() for name, sha in files.items()}
         revision = owned.capture(dict(schema="physicalrsi.tree-leaf/v1", components=components), exports)
         candidate = dict(id=node, root=str(owned.folder(revision) / "files"), components=deepcopy(components))
+        if 'file_modes' in self.body['nodes'][node]:
+            candidate['file_modes'] = deepcopy(modes)
         verify_harness(candidate)
         return candidate
 
@@ -234,7 +264,7 @@ class RoutedPolicy:
             raise ValueError("Frozen tree or routing provider changed")
         for node, policy in self.policies.items():
             if ((self.selected is None or node == self.selected)
-                    and verify_harness(self.leaves[node]) != digest(dict(components=self.tree.leaves[node]))):
+                    and verify_harness(self.leaves[node]) != digest(self.tree.leaf_identity(node))):
                 raise ValueError("Materialized branch files changed")
             if (dict(identity=policy.identity(), binding=asdict(policy.describe()),
                             lifecycle=callable(getattr(policy, "end_episode", None)),
@@ -285,7 +315,7 @@ class RoutedPolicy:
         # every inactive branch on each runtime liveness check.
         HarnessTree(self.tree.candidate)
         for node, leaf in self.leaves.items():
-            if verify_harness(leaf) != digest(dict(components=self.tree.leaves[node])):
+            if verify_harness(leaf) != digest(self.tree.leaf_identity(node)):
                 raise ValueError("Materialized branch files changed")
         if self.route_evidence is None:
             return dict(started=False)

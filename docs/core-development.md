@@ -80,13 +80,50 @@ renames the completed directory before the lineage pointer advances. Existing
 snapshots are checked and never silently overwritten. Historical records with
 external roots remain readable under their original integrity checks.
 
-File permissions are not yet part of the declared content identity. A local
-fault-injection audit at
+The original fault-injection audit at
 `/cpfs02/user/yanming/physicalrsi-core-checks/harness-mode-audit-001`
 changed a captured script from mode 0755 to 0644: execution failed with EACCES,
-but content verification passed and restoration reported no repair. Binding
-executable modes and checking them throughout capture, mutation and recovery is
-an open P0 requirement; preserving modes while copying does not detect later drift.
+but content verification passed and restoration reported no repair. New harness
+declarations can now bind `file_modes` for every declared file. This map uses
+integer POSIX permissions (0000–0777), contributes to the version identity and
+is checked alongside bytes. `bind_harness_modes(harness)` explicitly binds a
+verified source before a new run; it cannot rebind a declaration to hide drift.
+The bundled CPU, Isaac automatic-engineering and real-robot manifest builders
+bind modes by default. Historical manifests without this field retain their
+original content-only hashes; they do not attest permissions. Start a new lineage
+to migrate a historical manifest, rather than changing an existing run's identity.
+
+Mode changes belong to every component owning that file. Frozen components reject
+them, and evolution cannot add or drop mode coverage. Snapshot repair detects
+mode-only drift, verifies an independent source with the same declared modes,
+quarantines the damaged tree and restores the original version and permissions.
+Interrupted repair resumes through the existing durable rename protocol.
+
+Parameter mutation and archive reuse preserve the full declaration. New owned
+file records use `physicalrsi.owned-files/v2`, preserving and verifying modes;
+v1 records remain readable with their original semantics. Mode-bound harness
+trees use v2 and distinguish objects with the same bytes but different modes.
+Reconstructed leaves, checkpoint packages, training experience and loaded harness
+bindings preserve these declarations. The scope is declared regular-file modes:
+ownership, ACLs, directory permissions and the operating-system environment remain
+adapter/runtime inputs, not claims of this file snapshot contract.
+
+The acceptance at
+`/cpfs02/user/yanming/physicalrsi-core-checks/harness-modes-001`
+used frozen source manifest
+`adc74c759d42da38229045b4581489be701017e49020cda19d2845d8908c1f7a`.
+All 637 tests, compile checks and both public CLI smoke commands passed.
+On CPFS, a real executable supplied actions to two common-runtime counter cases.
+After two successful Trials, changing its snapshot mode from 0755 to 0644 caused
+direct execution to fail with EACCES; runtime binding rejected the next attempt
+before creating a Trial or resetting the environment. Explicit recovery restored
+0755, preserved the lineage head and quarantined the 0644 copy. Both cases then
+passed again: four successful Trials and eight executable actions in total.
+An independent restart prohibited reset and executable invocation, reproduced
+the same evaluations and repair receipt, and preserved the bytes and modes of
+65 evidence files. No new Trial or action occurred. The source, fault evidence,
+repair journal and restart audit are retained; this is software recovery evidence,
+not a new Isaac or physical qualification result.
 
 A completed paired comparison that retains its parent publishes an `assessment`
 lineage record. It advances the CAS revision and binds the full decision and

@@ -10,7 +10,7 @@ import shutil
 import tempfile
 
 from ..infra.storage import canonical, digest, relative_path
-from .artifacts import CLOSURE, HarnessSnapshots, verify_harness
+from .artifacts import CLOSURE, HarnessSnapshots, harness_identity, verify_harness
 
 
 def finite(value):
@@ -101,7 +101,7 @@ class ParameterSpace:
         components=deepcopy(candidate['components'])
         for f in self.fields:
             components[f.component][f.file]=digest(fixed[f.file])
-        return dict(values=values,documents=documents,condition_sha256=digest(components))
+        return dict(values=values,documents=documents,condition_sha256=digest(harness_identity(dict(candidate,components=components))))
 
     def unit(self,values):
         if len(values)!=len(self.fields):
@@ -137,6 +137,8 @@ class ParameterSpace:
 def materialize(parent,components,payloads,*,output,name):
     destination=Path(output)
     candidate=dict(id=name,root=str(destination),components=components)
+    if 'file_modes' in parent:
+        candidate['file_modes']=deepcopy(parent['file_modes'])
     if destination.is_symlink():
         raise ValueError('Parameter candidate must be an owned physical directory')
     if not destination.exists():
@@ -148,6 +150,7 @@ def materialize(parent,components,payloads,*,output,name):
                 target.parent.mkdir(parents=True,exist_ok=True)
                 if path in payloads:target.write_bytes(payloads[path])
                 else:shutil.copy2(Path(parent['root'])/path,target)
+                if 'file_modes' in candidate:target.chmod(candidate['file_modes'][path])
                 with target.open('rb') as stream:os.fsync(stream.fileno())
             verify_harness(dict(candidate,root=str(temporary)))
             verify_harness(parent)
@@ -158,6 +161,6 @@ def materialize(parent,components,payloads,*,output,name):
             HarnessSnapshots._sync(destination.parent)
         finally:
             if temporary.exists():shutil.rmtree(temporary)
-    if verify_harness(candidate)!=digest(dict(components=components)):
+    if verify_harness(candidate)!=digest(harness_identity(candidate)):
         raise ValueError('Existing parameter candidate differs from its frozen fit')
     return candidate

@@ -15,6 +15,11 @@ artifact closure; core retains the files without depending on a simulator.
 independent replica with the original hashes. It journals the operation and
 quarantines damaged bytes without changing the lineage head, so later retention
 checks can audit the repaired ancestor. Ordinary capture still refuses corruption.
+`self_harness.artifacts.bind_harness_modes` additionally binds every declared
+file's POSIX permissions before a new lineage starts. Bundled manifest builders
+use it by default. Permission drift is then detected and repaired just like byte
+drift; parameter mutation, archive reuse, trees and checkpoints preserve the
+declaration. Historical content-only manifests keep their original semantics.
 `HarnessState.history(revision)` audits the full ancestry in one read. Repeated
 snapshot and evidence checks are shared within that call; subsequent reads
 verify bytes again. Candidate archive reads use the same bounded reuse and parse

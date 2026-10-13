@@ -260,8 +260,27 @@ def test_published_candidate_manifest_cannot_change_on_install_resume(tmp_path):
     revision = store.binding(initial)["revision"]
     destination = tmp_path / "installed"
     child = store.install(initial,revision,destination,candidate_id="copy")
+    assert child['file_modes'] == initial['file_modes']
     assert store.install(initial,revision,destination,candidate_id="copy") == child
     child["id"] = "substituted"
     atomic_json(destination / "manifest.json",child)
     with pytest.raises(ValueError,match="installation request"):
         store.install(initial,revision,destination,candidate_id="copy")
+
+
+@pytest.mark.parametrize('damage', ['source-package', 'weights-binding', 'fixed-input'])
+def test_checkpoint_permission_drift_is_rejected_before_use_or_resume(tmp_path, damage):
+    _, initial, _, _, _ = setup(tmp_path)
+    store = CheckpointStore(tmp_path / 'models')
+    binding = store.binding(initial)
+    revision = binding['revision']
+    child = store.install(initial, revision, tmp_path / 'copy', candidate_id='copy')
+    if damage == 'source-package':
+        path = store.checkpoints.folder(revision) / 'files' / binding['record']['metadata']['entrypoint']
+    else:
+        path = Path(child['root']) / ('weights.json' if damage == 'weights-binding' else 'tools.json')
+    path.chmod(0o755)
+    with pytest.raises(ValueError, match='file mode'):
+        store.binding(child)
+    with pytest.raises(ValueError, match='file mode'):
+        store.install(initial, revision, tmp_path / 'copy', candidate_id='copy')

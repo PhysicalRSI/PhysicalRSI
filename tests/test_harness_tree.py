@@ -74,8 +74,9 @@ def test_owned_tree_reconstructs_logical_files_after_source_loss(tmp_path):
     shutil.rmtree(tmp_path / "source")
     restored = packaged.materialize("vector",tmp_path / "materialized")
     assert read_json(Path(restored["root"]) / "control.json") == {"coefficient":2.}
-    assert verify_harness(restored) == digest(dict(components=packaged.leaves["vector"]))
-    source = packaged.root / "objects/control" / file_digest(Path(restored["root"]) / "control.json")
+    assert verify_harness(restored) == digest(packaged.leaf_identity("vector"))
+    source = packaged.root / next(n for n, sha in candidate["components"]["control"].items()
+        if n.startswith("objects/") and sha == file_digest(Path(restored["root"]) / "control.json"))
     assert source.stat().st_ino != (Path(restored["root"]) / "control.json").stat().st_ino
     (Path(restored["root"]) / "control.json").write_text("damaged")
     with pytest.raises(ValueError,match="changed"):
@@ -93,6 +94,7 @@ def test_branch_components_and_logical_names_cannot_bypass_evolution_limits(tmp_
     original = Path(source["root"]) / "foundation.json"
     original.rename(original.with_name("renamed.json"))
     source["components"]["foundation"] = {"renamed.json":source["components"]["foundation"]["foundation.json"]}
+    source["file_modes"]["renamed.json"] = source["file_modes"].pop("foundation.json")
     renamed = HarnessTree.create({"fallback":dict(parent=None,when={},harness=source)},keys=["task"],
                                 output=tmp_path / "renamed-tree",name="renamed")
     with pytest.raises(ValueError,match="foundation"):
@@ -206,7 +208,7 @@ def test_started_branch_cleanup_survives_runtime_integrity_failure(tmp_path,dama
             return policy
     suite=Suite(tmp_path / "leaves")
     policy=RoutedPolicy(candidate,task="axis-shifted",backend=WorkerBackend(),extractor=PublicCapabilities(),workspace=suite.workspace)
-    expected=digest(dict(components=HarnessTree(candidate).leaves["shifted"]))
+    expected=digest(HarnessTree(candidate).leaf_identity("shifted"))
     environment=suite.environment("axis-shifted")
     step=environment.step
     def corrupt(action,context):
@@ -217,7 +219,8 @@ def test_started_branch_cleanup_survives_runtime_integrity_failure(tmp_path,dama
             policy.policies[policy.selected].end_episode=None
         else:
             sha=HarnessTree(candidate).leaves["vector"]["control"]["control.json"]
-            (Path(candidate["root"])/"objects/control"/sha).write_text("inactive branch changed")
+            path = next(n for n, value in candidate["components"]["control"].items() if n.startswith("objects/") and value == sha)
+            (Path(candidate["root"])/path).write_text("inactive branch changed")
         return result
     environment.step=corrupt
     runtime=ExperimentRuntime(tmp_path / "runtime")

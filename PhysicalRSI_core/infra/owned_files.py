@@ -3,6 +3,7 @@ from copy import deepcopy
 import os
 from pathlib import Path
 import shutil
+import stat
 import tempfile
 
 from .storage import atomic_json, digest, file_digest, locked, read_json, relative_path
@@ -57,26 +58,50 @@ class OwnedFiles:
     def read(self, revision):
         root = self.folder(revision)
         record = read_json(physical(root, "record.json"))
-        if digest(record) != revision or record.get("schema") != "physicalrsi.owned-files/v1":
+        version = record.get('schema')
+        if digest(record) != revision or version not in {'physicalrsi.owned-files/v1', 'physicalrsi.owned-files/v2'}:
             raise ValueError("Owned artifact record changed")
+        expected = {'schema', 'metadata', 'files'} | ({'file_modes'} if version.endswith('/v2') else set())
+        if set(record) != expected or not isinstance(record['files'], dict) or not record['files']:
+            raise ValueError('Owned artifact declaration fields changed')
+        if version.endswith('/v2') and (not isinstance(record['file_modes'], dict)
+                or set(record['file_modes']) != set(record['files'])
+                or any(type(m) is not int or not 0 <= m <= 0o777 for m in record['file_modes'].values())):
+            raise ValueError('Owned artifact file mode declaration changed')
         files = root / "files"
         actual = _file_names(files)
         if actual != set(record["files"]):
             raise ValueError("Owned artifact closure changed")
         for name, sha in record["files"].items():
-            if file_digest(physical(files, name)) != sha:
+            path = physical(files, name)
+            if file_digest(path) != sha:
                 raise ValueError("Owned artifact file changed: " + name)
+            if version.endswith('/v2') and stat.S_IMODE(path.stat().st_mode) != record['file_modes'][name]:
+                raise ValueError('Owned artifact file mode changed: ' + name)
         return deepcopy(record)
 
-    def capture(self, metadata, files):
+    def capture(self, metadata, files, *, bind_modes=True):
+        """Pin modes by default; bind_modes=False only reconstructs legacy v1 records."""
         if not isinstance(files, dict) or not files:
             raise ValueError("Declare a nonempty owned artifact closure")
         files = deepcopy(files)
         for name, entry in files.items():
             if str(relative_path(name)) != name or set(entry) != {"path", "sha256"}:
                 raise ValueError("Invalid artifact source declaration")
-        body = dict(schema="physicalrsi.owned-files/v1", metadata=deepcopy(metadata),
+        if type(bind_modes) is not bool:
+            raise ValueError('Declare whether to bind artifact modes')
+        body = dict(schema="physicalrsi.owned-files/v2" if bind_modes else "physicalrsi.owned-files/v1", metadata=deepcopy(metadata),
                     files={name: entry["sha256"] for name, entry in files.items()})
+        if bind_modes:
+            modes = {}
+            for name, entry in files.items():
+                source = Path(entry['path'])
+                if source.is_symlink() or not source.is_file():
+                    raise ValueError('Artifact source must be a physical file')
+                modes[name] = stat.S_IMODE(source.stat().st_mode)
+                if modes[name] > 0o777:
+                    raise ValueError('Owned files require regular POSIX permission bits')
+            body['file_modes'] = modes
         revision = digest(body)
         target = self.folder(revision)
         with locked(self.root / ".lock"):
@@ -92,9 +117,14 @@ class OwnedFiles:
                         with source.open("rb") as incoming, destination.open("xb") as outgoing:
                             shutil.copyfileobj(incoming, outgoing)
                             outgoing.flush()
+                            if bind_modes:
+                                os.fchmod(outgoing.fileno(), body['file_modes'][name])
                             os.fsync(outgoing.fileno())
                         if file_digest(destination) != entry["sha256"]:
                             raise ValueError("Artifact source changed during capture")
+                        if bind_modes and (stat.S_IMODE(source.stat().st_mode) != body['file_modes'][name]
+                                or file_digest(source) != entry['sha256']):
+                            raise ValueError('Artifact source mode or bytes changed during capture')
                     atomic_json(temporary / "record.json", body)
                     for folder in sorted((p for p in temporary.rglob("*") if p.is_dir()),
                                          key=lambda p: len(p.parts), reverse=True):

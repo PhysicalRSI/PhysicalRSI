@@ -422,6 +422,8 @@ class CandidateArchive:
                 with target.open("rb") as stream:
                     os.fsync(stream.fileno())
             candidate = dict(id=name, root=str(temporary), components=deepcopy(source["components"]))
+            if 'file_modes' in source:
+                candidate['file_modes'] = deepcopy(source['file_modes'])
             if verify_harness(candidate) != row["freeze_sha256"]:
                 raise ValueError("Archived branch changed during materialization")
             for directory in sorted((p for p in temporary.rglob("*") if p.is_dir()),

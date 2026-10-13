@@ -8,6 +8,7 @@ from dataclasses import replace
 import math
 from pathlib import Path
 import shutil
+import stat
 
 from PhysicalRSI_core.contracts import Context, Contract, Operation
 from PhysicalRSI_core.embodiment import Dependency, Revision
@@ -204,8 +205,10 @@ class TransferEvolver:
             evidence=lesson["evidence"], costs=dict(proposals=1), used_lessons=[LESSON],
             hypothesis=lesson["hypothesis"], expected_effect="Transfer the source-axis response to structured actions",
             required_checks=["paired-position-success"])
-        candidate["components"]["skills"].update({str(p.relative_to(root)): file_digest(p)
-            for p in folder.rglob("*") if p.is_file()})
+        added = {str(p.relative_to(root)): file_digest(p) for p in folder.rglob('*') if p.is_file()}
+        candidate['components']['skills'].update(added)
+        candidate['file_modes'].update({name: stat.S_IMODE((root / name).stat().st_mode) for name in added})
+        verify_harness(candidate)
         return [candidate]
 
 
