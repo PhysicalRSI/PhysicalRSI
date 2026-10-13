@@ -48,6 +48,37 @@ def worker(root, capacity, evidence, ids):
     JobScheduler(root, capacities={"cpu": capacity}).work_once(FileHandler(evidence), ids=ids)
 
 
+def test_local_worker_failure_between_polls_preserves_original_error(tmp_path, monkeypatch):
+    import PhysicalRSI_core.infra.scheduler as module
+
+    class FailingHandler(FileHandler):
+        def execute(self, payload):
+            raise RuntimeError('specific startup failure')
+
+    scheduler = JobScheduler(tmp_path / 'queue', capacities={'cpu': 1})
+    handler = FailingHandler(tmp_path / 'effects')
+    ids = scheduler.submit([dict(name='failed')], handler=handler, resources={'cpu': 1})
+    real_wait = module.wait
+    delayed = False
+
+    def finish_after_observation(futures, **options):
+        nonlocal delayed
+        if not delayed:
+            delayed = True
+            # Model a worker finishing just after a timed wait reported no
+            # completion, before the next durable-state scan.
+            real_wait(futures)
+            return set(), set(futures)
+        return real_wait(futures, **options)
+
+    monkeypatch.setattr(module, 'wait', finish_after_observation)
+    with pytest.raises(RuntimeError, match='specific startup failure'):
+        scheduler.run_until(ids, handler)
+    job = scheduler.status()['jobs'][ids[0]]
+    assert job['state'] == 'needs_reconciliation'
+    assert not job['owner_active']
+
+
 @pytest.mark.parametrize('value', [True, 1.0])
 @pytest.mark.parametrize('entry', ['reopen', 'execute'])
 def test_scheduler_rejects_stored_capacity_type_drift(tmp_path, value, entry):

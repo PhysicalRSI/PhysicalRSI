@@ -305,7 +305,7 @@ class JobScheduler:
         if (not ids or len(set(ids)) != len(ids) or type(workers) is not int or workers < 1
                 or not math.isfinite(wait_seconds) or wait_seconds <= 0):
             raise ValueError("Declare jobs, worker count and a finite observation budget")
-        deadline, futures, checked = monotonic() + wait_seconds, set(), set()
+        deadline, futures, checked = monotonic() + wait_seconds, {}, set()
         with ThreadPoolExecutor(max_workers=workers) as pool:
             while True:
                 view = self.status(ids)["jobs"]
@@ -319,12 +319,16 @@ class JobScheduler:
                         if digest(self._invoke(job["request"], handler, "collect")) != job["result_sha256"]:
                             raise ValueError("Completed scheduled evidence changed")
                         checked.add(key)
-                    if job["state"] in {"running", "needs_reconciliation"} and not job["owner_active"]:
+                    # A local worker can release its owner lock between polls
+                    # before its Future is consumed. Preserve its exception;
+                    # recovery is for jobs without an outstanding local Future.
+                    if (job["state"] in {"running", "needs_reconciliation"}
+                            and not job["owner_active"] and key not in futures.values()):
                         try:
                             self.recover_completed(key, handler)
                         except JobBusy:
                             pass  # Another collector proved ownership first.
-                if all(job["state"] == "completed" for job in view.values()):
+                if not futures and all(job["state"] == "completed" for job in view.values()):
                     results = []
                     for key in ids:
                         job = view[key]
@@ -340,7 +344,7 @@ class JobScheduler:
                     if claim is None:
                         break
                     try:
-                        futures.add(pool.submit(self._execute, claim, handler))
+                        futures[pool.submit(self._execute, claim, handler)] = claim[0]
                     except BaseException:
                         # submit() may enqueue work before failing to start a
                         # thread. Keep ownership until all possible workers stop.
@@ -348,8 +352,9 @@ class JobScheduler:
                         claim[2].close()
                         raise
                 if futures:
-                    done, futures = wait(futures, timeout=.02, return_when=FIRST_COMPLETED)
+                    done, _ = wait(futures, timeout=.02, return_when=FIRST_COMPLETED)
                     for future in done:
+                        futures.pop(future)
                         future.result()
                 else:
                     sleep(.02)

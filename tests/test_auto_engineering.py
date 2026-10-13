@@ -32,6 +32,24 @@ def test_rgbd_detection_ignores_nonfinite_background():
     assert detect(rgb,depth,lambda uv,d:uv)['tube']['status']=='not_detected'
 
 
+@pytest.mark.parametrize('height', [-.1, .021, .2])
+@pytest.mark.parametrize('elevated_pixels', [0, 6, 20])
+def test_receiver_support_height_resists_minority_elevated_pixels(height, elevated_pixels):
+    rgb=np.zeros((10,10,3),dtype=np.uint8);rgb[...,1]=200
+    z=np.full(100,height);z[:elevated_pixels]=height+.05;z[-10:]=height-.01
+    result=detect(rgb,np.ones((10,10)),lambda uv,d:np.column_stack([uv*.001,z]))
+    assert result['receiver']['pixels']==100
+    assert result['receiver']['top_z']==height
+
+
+@pytest.mark.parametrize('name,color', [('tube',[0,0,200]),('obstacle',[200,150,0])])
+def test_object_top_height_still_uses_upper_surface(name, color):
+    rgb=np.broadcast_to(np.array(color,dtype=np.uint8),(10,10,3))
+    z=np.full(100,.12);z[:10]=.15
+    result=detect(rgb,np.ones((10,10)),lambda uv,d:np.column_stack([uv*.001,z]))
+    assert result[name]['top_z']==.15
+
+
 def test_repair_uses_public_height_and_does_not_mutate_parent():
     memory={'transit_height_m':.13,'sample_height_m':.12};original=copy.deepcopy(memory)
     public={name:dict(status='estimated_surface',center_xy=[.4,.2],top_z=z) for name,z in [('tube',.13),('receiver',.02),('obstacle',.18)]}

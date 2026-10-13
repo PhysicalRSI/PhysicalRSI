@@ -27,6 +27,10 @@ def detect(rgb, depth, unproject):
             continue
         points = np.asarray(unproject(np.column_stack([u,v]), depth[v,u]))
         lo,hi = np.quantile(points,[.05,.95],axis=0)
+        # The receiving pad is a support surface; minority elevated pixels
+        # should not move its estimated landing height. Other objects retain
+        # their upper-surface estimate.
+        surface_z = np.median(points[:,2]) if name == 'receiver' else hi[2]
         result[name] = dict(status='estimated_surface', center_xy=((lo[:2]+hi[:2])/2).tolist(),
-                            top_z=float(hi[2]), lower=lo.tolist(), upper=hi.tolist(), pixels=len(u))
+                            top_z=float(surface_z), lower=lo.tolist(), upper=hi.tolist(), pixels=len(u))
     return result

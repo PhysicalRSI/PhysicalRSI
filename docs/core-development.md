@@ -2124,3 +2124,66 @@ and total Trial times were 233.46 and 234.02 seconds. The device registry was
 empty afterward. `measurement-audit.json` retains receipt hashes and raw-check
 verification. No speedup, rare-crash elimination, or benchmark improvement is
 established by these two successful diagnostic cases.
+
+### Static capture convergence diagnostic, 2026-10-14
+
+`native-capture-convergence-001` froze source `dda1a38` plus diagnostic-only
+capture instrumentation. Two fresh processes used the same development seed
+2026102000 and fixed memory, sharing a cache (cold first process, warm second).
+Each saved its first ready RGB-D frame and eight additional static captures.
+Physics step and time remained fixed across all captures. The original first
+frame was copied and retained as the policy input; subsequent frames served
+only for observation diagnostics. Both complete Trials reported success.
+
+All 18 depth arrays were identical, including NaNs. Between processes, mean
+absolute RGB difference on the 0–255 scale decreased from 2.300 at the first
+frame to 0.365 at the ninth. Nevertheless, the receiver's 95th-percentile height
+varied by 0.004364 meters across captures; the last frame of the second process
+returned to the higher estimate. Thus eight extra captures did not guarantee
+convergence of the existing height estimator in this case. Receiver-height
+medians and 75th percentiles were constant across these 18 frames. This is
+offline sensitivity evidence, not validation of a replacement detector or
+proof that rendering noise alone caused previous task failures.
+
+The driver exited and the device registry was empty after both Trials.
+`analysis.json` verifies receipt hashes, fixed physics, original-input retention
+and image comparisons; `height-sensitivity.json` reproduces the existing height
+estimates from saved RGB-D and calibration before comparing quantiles. No
+additional-capture change was merged into the native adapter.
+
+### Receiver support-height estimate and scheduler error propagation, 2026-10-14
+
+The demo detector now estimates the flat receiving pad's support height with
+the median of its observed color-region points. Tube and obstacle estimates
+retain their upper-surface quantile. Color masks, XY bounds and controller
+memory are unchanged. This assumes the detected receiver region is dominated
+by its support surface; it is not a general detector for arbitrary geometry.
+
+`native-receiver-height-001` froze original and median variants in ABBA order,
+using paired fresh development seeds 2026102100–2101 and fixed memory
+`(transit_height_m=0.418, grasp_depth_fraction=0.25)`. All four complete native
+Trials passed seven independently recomputed checks, each with 1,576 physics
+steps. Paired layouts and memory matched. The original receiver heights were
+0.0274999142 and 0.0288590193 meters; the median variant returned 0.0209999084
+in both cases. These results support compatibility on the two cases, not a
+success-rate gain. `analysis.json` retains receipt hashes and paired results.
+
+Software regression exposed a separate scheduler race: a worker could release
+its owner lock just after a wait timed out, causing the next scan to attempt
+recovery before consuming the local Future. The resulting generic reconciliation
+error obscured the worker's original exception. The scheduler now tracks each
+local Future's job ID and defers recovery until that Future is consumed. It also
+consumes outstanding local Futures before returning completed results. Durable
+uncertain states and explicit recovery requirements remain in force.
+
+A deterministic test reproduces the inter-poll completion window: it fails on
+the old implementation and passes with the fix, preserving the original startup
+error and the uncertain job state. The original candidate's full suite recorded
+889 passes and this related recovery-test failure; it was not treated as a clean
+run. Evidence is under `core-receiver-height-001` and
+`core-receiver-height-fixed-001`.
+The combined frozen implementation passed all 891 software tests in 167.40
+seconds. The subsequently added receiver-estimator cases were checked with the
+complete auto-engineering test file (20 passes). Integration auditing verifies
+the final implementation matches that frozen snapshot; only documentation,
+the additional test cases and the user-owned `AGENTS.md` differ.
