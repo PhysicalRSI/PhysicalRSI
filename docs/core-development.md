@@ -1018,6 +1018,12 @@ are verified at binding; core does not hash a large model at every token. These
 ports are trusted implementations, not a security sandbox or remote attestation.
 
 System 2 freezes a planner result based only on verified development Trials.
+The proposer owns a deep snapshot of both new and recovered planner replies
+before subsequent callbacks. Candidate hypotheses and required checks therefore
+retain the acknowledged plan even if a plugin later updates its reply object.
+Planner identity and context are independently snapshotted before planning; a
+planner that mutates its declared configuration is rejected before submitting
+training, including when recovering an interrupted plan.
 `DevelopmentExperience` retains the parent files and complete source evidence
 independently of the original workspace; skill compilation shares this storage
 contract. Training requires every source Trial to name the exact parent model.

@@ -331,3 +331,97 @@ def test_training_provenance_owns_provider_replies_across_callbacks(tmp_path, re
     assert provider.status['notes']['stage'] == 'later collection progress'
     assert coordinator.advance(request, output) == revision
     assert provider.submissions == 1 and len(provider.scheduler.status()['jobs']) == 1
+
+
+@pytest.mark.parametrize('recover', [False, True])
+def test_training_candidate_owns_planner_reply_across_provider_callbacks(tmp_path, monkeypatch, recover):
+    from PhysicalRSI_demos.checkpoint_evolution import Planner
+
+    campaign, initial, _, quota, provider = setup(tmp_path)
+    original_plan, original_submit, original_collect = Planner.plan, Provider.submit, Provider.collect
+    replies, published = [], []
+    original_install = CheckpointStore.install
+    lost = False
+
+    def plan(self, *args):
+        nonlocal lost
+        result = original_plan(self, *args)
+        replies.append(result)
+        if recover and not lost:
+            lost = True
+            raise RuntimeError('lost planner reply')
+        return result
+
+    def submit(self, request, output):
+        handle = original_submit(self, request, output)
+        self.scheduler.work_once(self.handler)
+        return handle
+
+    def collect(self, handle):
+        result = original_collect(self, handle)
+        replies[-1]['required_checks'].append('later planner diagnostics')
+        replies[-1]['hypothesis'] = 'later planner hypothesis'
+        return result
+
+    def install(self, parent, revision, output, **kwargs):
+        child = original_install(self, parent, revision, output, **kwargs)
+        if 'hypothesis' in kwargs:
+            frozen = read_json(Path(output).parent / 'plan.json')['output']
+            for key in ('hypothesis', 'expected_effect', 'required_checks', 'used_lessons'):
+                assert child[key] == frozen[key]
+            published.append(child)
+        return child
+
+    monkeypatch.setattr(Planner, 'plan', plan)
+    monkeypatch.setattr(Planner, 'resume_plan', plan)
+    monkeypatch.setattr(Provider, 'submit', submit)
+    monkeypatch.setattr(Provider, 'collect', collect)
+    monkeypatch.setattr(CheckpointStore, 'install', install)
+    if recover:
+        with pytest.raises(RuntimeError, match='lost planner reply'):
+            campaign.run(initial)
+        assert provider.scheduler.status()['jobs'] == {}
+    research = campaign.run(initial)
+    assert [row['outcome'] for row in research['rounds']] == ['inherit_child', 'inherit_child']
+    assert len(published) == 2
+    assert replies[-1]['hypothesis'] == 'later planner hypothesis'
+    reserved = quota.status()['reserved_trials']
+    assert campaign.run(initial) == research
+    assert quota.status()['reserved_trials'] == reserved
+    assert len(provider.scheduler.status()['jobs']) == 2
+
+
+@pytest.mark.parametrize('recover', [False, True])
+def test_changed_planner_identity_is_rejected_before_training(tmp_path, monkeypatch, recover):
+    from PhysicalRSI_demos.checkpoint_evolution import Planner
+
+    identity = dict(Planner().identity(), settings=dict(version=1))
+    original_plan = Planner.plan
+    lost = False
+
+    def plan(self, *args):
+        nonlocal lost
+        if recover and not lost:
+            lost = True
+            raise RuntimeError('lost planner reply')
+        result = original_plan(self, *args)
+        identity['settings']['version'] = 2
+        return result
+
+    monkeypatch.setattr(Planner, 'identity', lambda self: identity)
+    monkeypatch.setattr(Planner, 'plan', plan)
+    monkeypatch.setattr(Planner, 'resume_plan', plan)
+    campaign, initial, _, quota, provider = setup(tmp_path)
+    path = tmp_path / 'campaign/rounds/round-0001/execution/training-proposal/plan.json'
+    if recover:
+        with pytest.raises(RuntimeError, match='lost planner reply'):
+            campaign.run(initial)
+        started = read_json(path)
+    with pytest.raises(ValueError, match='Training planner changed'):
+        campaign.run(initial)
+    assert read_json(path)['state'] == 'started'
+    if recover:
+        assert read_json(path) == started
+    assert provider.scheduler.status()['jobs'] == {}
+    assert quota.status()['reserved_trials'] == 16
+    assert not (path.parent / 'job').exists()

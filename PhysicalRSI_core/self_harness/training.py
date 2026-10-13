@@ -206,7 +206,8 @@ class CheckpointProposer:
         store = self.coordinator.store
         binding = store.binding(parent, binding_path=self.binding_path, model=self.model)
         directory = Path(output) / "training-proposal"
-        inputs = dict(parent=verify_harness(parent), feedback=digest(feedback), context=context, planner=self.planner.identity())
+        inputs = deepcopy(dict(parent=verify_harness(parent), feedback=digest(feedback),
+                               context=context, planner=self.planner.identity()))
         with locked(directory / ".proposal.lock"):
             path = directory / "plan.json"
             plan = None
@@ -228,6 +229,9 @@ class CheckpointProposer:
             else:
                 atomic_json(path, dict(state="started", input_sha256=digest(inputs)))
                 plan = self.planner.plan(deepcopy(parent), deepcopy(values), deepcopy(context), directory)
+            # Training callbacks must not change the plan already acknowledged
+            # by the planner, including a recovered reply's nested provenance.
+            plan = deepcopy(plan)
             if self.planner.identity() != inputs["planner"]:
                 raise ValueError("Training planner changed")
             atomic_json(path, dict(state="completed", input_sha256=digest(inputs), output=plan, output_sha256=digest(plan)))
