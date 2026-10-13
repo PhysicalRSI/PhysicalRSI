@@ -1193,6 +1193,14 @@ cannot satisfy this threshold. This is an explicit exploration heuristic, not
 a confidence bound or a guarantee of geometric coverage. Every fit records
 `model_ready` and the effective threshold; changing it requires a new run because
 it is part of the evolver identity.
+The optional `covariance="full"` mode preserves empirical correlations between
+elite parameters. It keeps the diagonal mode's marginal spreads, shrinks
+off-diagonal covariance terms by a fixed 10%, and samples through a Cholesky
+factor. The shrinkage and minimum spread keep collinear or small elite sets from
+collapsing the proposal distribution. Fits record the covariance matrix and its
+factor. Global exploration, warmup, precision grids, complete-panel requirements
+and selection rules are unchanged. `covariance="diagonal"` remains the default;
+correlation estimates from a small development sample are not confidence bounds.
 Already observed vectors are skipped, and a fixed attempt budget prevents
 unbounded retries on a coarse or exhausted grid. A deterministic random seed,
 ranked observations, exclusions, fitted distribution and proposed vectors are
@@ -1294,3 +1302,38 @@ All resource claims were released. `acceptance-audit.json`, `final-review.json`
 and the byte-verified CPFS artifact archives retain the evidence. Ten seeds and
 two software load tasks do not establish broad or native performance, and these
 final cases must not be reused as fresh held-out evidence.
+
+### Observed covariance comparison, 2026-10-13
+
+The preregistered `adaptive-covariance-001` study used seeds 20–29, four rounds,
+six candidates per round, a five-vector warmup and a 228-Trial cap per arm.
+Development, validation and final panels differed from both prior studies,
+including effective displacement/load combinations. Correlated sampling kept
+the first global exploration points and initial warmup population identical to
+the controls. Every comparison used the same case plans and selection rules.
+
+| Strategy | Mean final quality | Final successes | Total Trials |
+| --- | --- | --- | --- |
+| Diagonal adaptive | 0.825627 | 40 / 40 | 1,828 |
+| Full covariance | 0.826192 | 40 / 40 | 1,836 |
+| Uniform | 0.826769 | 40 / 40 | 1,584 |
+
+Full covariance exceeded diagonal sampling by only 0.000565 in mean quality,
+with two seed wins, two losses and six ties, consuming eight additional Trials.
+It was 0.000577 below uniform sampling and consumed 252 more Trials. This meets
+the preregistered condition for retaining an optional mode, but establishes no
+practical or statistically supported performance advantage. Diagonal sampling
+and the one-observation threshold remain the defaults. The uniform control
+remains essential for assessing whether feedback-guided sampling earns its cost.
+
+All 665 tests passed. Independent replay reconstructed 5,248 trajectories and
+recomputed their scores. It also reproduced the existing diagonal/uniform
+sampling sequence from stored fit inputs and checked the full covariance factors.
+All 30 independent restarts added zero Trials/actions and preserved 90,377 files
+and their modes. The 1,162 scheduled jobs completed with no retained resource
+claims. Frozen sources, complete reports, audit scripts and 30 byte/mode-verified
+artifact archives (154,814,518 compressed bytes) are retained at
+`/cpfs02/user/yanming/physicalrsi-core-checks/adaptive-covariance-001`.
+This is descriptive evidence from one software dynamics family, not native
+Isaac improvement, broad transfer or physical qualification. These final panels
+are now observed and must not be reused as untouched tests for later tuning.

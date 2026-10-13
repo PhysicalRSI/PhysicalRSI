@@ -17,6 +17,21 @@ from .evaluation import freeze_json
 from .search_space import ParameterSpace, finite
 
 
+def _cholesky(covariance):
+    """Small dense factor for the bounded, regularized proposal distribution."""
+    factor=[[0.] * len(covariance) for _ in covariance]
+    for i in range(len(covariance)):
+        for j in range(i+1):
+            residual=covariance[i][j]-math.fsum(factor[i][k]*factor[j][k] for k in range(j))
+            if i==j:
+                if not math.isfinite(residual) or residual<=0:
+                    raise ValueError('Full proposal covariance must be positive definite')
+                factor[i][j]=math.sqrt(residual)
+            else:
+                factor[i][j]=residual/factor[j][j]
+    return factor
+
+
 def measurement_context(value):
     """Pin measured dynamics, verifier, budget and contracts across fidelities.
 
@@ -46,25 +61,29 @@ def measurement_context(value):
 class AdaptiveParameterEvolver:
     def __init__(self,*,archive,space,objective,task_weights,population=6,seed=0,
                  elite_fraction=.25,exploration_fraction=.5,minimum_scale=.025,
-                 strategy='adaptive',stop_on_success=True,minimum_observations=1):
+                 strategy='adaptive',stop_on_success=True,minimum_observations=1,covariance='diagonal'):
         if not isinstance(space,ParameterSpace):
             raise ValueError('Declare a ParameterSpace')
         if minimum_observations is None:
             minimum_observations=2*len(space.fields)+1
         if type(minimum_observations) is not int or minimum_observations<1:
             raise ValueError('Declare a positive integer minimum_observations')
+        if covariance not in ('diagonal','full'):
+            raise ValueError('Declare diagonal or full proposal covariance')
         if (type(population) is not int or not 1<=population<=64 or type(seed) is not int
                 or not 0<finite(elite_fraction)<=1 or not 0<finite(exploration_fraction)<=1
                 or not 0<finite(minimum_scale)<=1 or strategy not in ('adaptive','uniform')
                 or type(stop_on_success) is not bool or not isinstance(task_weights,dict) or not task_weights
                 or any(not isinstance(t,str) or not t or finite(w)<=0 for t,w in task_weights.items())):
             raise ValueError('Declare a bounded population, sampling policy and positive task weights')
+        if covariance=='full' and finite(minimum_scale)**2==0:
+            raise ValueError('Full covariance requires a representable positive minimum variance')
         self.archive,self.space,self.objective=archive,space,objective
         self.weights=deepcopy(task_weights)
         finite(sum(self.weights.values()))
         self.settings=dict(population=population,seed=seed,elite_fraction=elite_fraction,
             exploration_fraction=exploration_fraction,minimum_scale=minimum_scale,strategy=strategy,
-            stop_on_success=stop_on_success,minimum_observations=minimum_observations)
+            stop_on_success=stop_on_success,minimum_observations=minimum_observations,covariance=covariance)
         self._identity=deepcopy(self.identity())
 
     def identity(self):
@@ -145,6 +164,18 @@ class AdaptiveParameterEvolver:
         center=[sum(v[i] for v in units)/len(units) for i in range(len(self.space.fields))] if units else self.space.unit(inspected['values'])
         scale=[max(self.settings['minimum_scale'],math.sqrt(sum((v[i]-center[i])**2 for v in units)/len(units)))
                if len(units)>1 else .25 for i in range(len(center))]
+        covariance=[[scale[i]**2 if i==j else 0. for j in range(len(center))] for i in range(len(center))]
+        factor=None
+        if self.settings['covariance']=='full':
+            # Keep the diagonal policy's marginal spreads. Shrinking empirical
+            # off-diagonal terms by 10% retains positive variance in every
+            # direction even with fewer elites than dimensions or collinear data.
+            if len(units)>1:
+                for i in range(len(center)):
+                    for j in range(i):
+                        covariance[i][j]=covariance[j][i]=.9*math.fsum(
+                            (v[i]-center[i])*(v[j]-center[j]) for v in units)/len(units)
+            factor=_cholesky(covariance)
         rng_seed=digest(dict(seed=self.settings['seed'],round=context['index'],panel=panel,condition=inspected['condition_sha256']))
         rng=Random(int(rng_seed,16))
         proposals=[]
@@ -163,7 +194,13 @@ class AdaptiveParameterEvolver:
             for slot in range(population):
                 role='global' if slot<global_count else 'elite'
                 for attempt in range(256):
-                    vector=([rng.random() for _ in center] if role=='global' else [rng.gauss(m,s) for m,s in zip(center,scale)])
+                    if role=='global':
+                        vector=[rng.random() for _ in center]
+                    elif factor is None:
+                        vector=[rng.gauss(m,s) for m,s in zip(center,scale)]
+                    else:
+                        noise=[rng.gauss(0.,1.) for _ in center]
+                        vector=[m+math.fsum(factor[i][j]*noise[j] for j in range(i+1)) for i,m in enumerate(center)]
                     values=self.space.quantize(vector)
                     if tuple(values) not in seen:
                         proposals.append(dict(values=values,role=role));seen.add(tuple(values));break
@@ -172,6 +209,7 @@ class AdaptiveParameterEvolver:
             parent_sha256=verify_harness(parent),condition_sha256=inspected['condition_sha256'],
             archive_view_sha256=digest(search['view']),panel=panel,samples=samples,excluded=excluded,
             ranked=ranked,incomplete=incomplete,elite=elite,center=center,scale=scale,model_ready=model_ready,
+            covariance=covariance,covariance_factor=factor,
             random_seed=rng_seed,proposals=proposals,reason=reason,qualification=None)
         output=Path(output)
         freeze_json(output/'adaptive-fit.json',report)

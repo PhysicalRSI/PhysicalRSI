@@ -1,5 +1,6 @@
 from copy import deepcopy
 from pathlib import Path
+import math
 
 import pytest
 
@@ -98,6 +99,62 @@ def test_sparse_feedback_uses_the_same_global_population_as_uniform_search(tmp_p
     assert all(p['role']=='global' for p in a['proposals'])
 
 
+def test_full_covariance_preserves_elite_geometry_and_global_control_points(tmp_path):
+    history=[]
+    for index,point in enumerate(((1.,1.),(2.,2.),(3.,3.))):
+        historical=candidate(tmp_path/('observed-'+str(index)),point)
+        history.extend(rows(historical,values(tmp_path/('history-'+str(index)),historical)))
+    diagonal,args=build(tmp_path/'diagonal',history=history,elite_fraction=1)
+    full,other=build(tmp_path/'full',history=history,elite_fraction=1,covariance='full')
+    diagonal.propose_from_archive(*args);full.propose_from_archive(*other)
+    a,b=[read_json(v[-1]/'adaptive-fit.json') for v in (args,other)]
+    assert a['center']==b['center'] and a['scale']==b['scale']
+    assert a['proposals'][:2]==b['proposals'][:2]
+    assert a['proposals'][2:]!=b['proposals'][2:]
+    assert a['covariance_factor'] is None and a['covariance'][0][1]==0
+    matrix,factor=b['covariance'],b['covariance_factor']
+    assert matrix[0][1]>0 and matrix[0][1]==matrix[1][0]
+    for i in range(2):
+        assert matrix[i][i]==pytest.approx(a['scale'][i]**2)
+        for j in range(2):
+            assert sum(factor[i][k]*factor[j][k] for k in range(2))==pytest.approx(matrix[i][j])
+    assert all(.1<=v<=8 and round(v,3)==v for row in b['proposals'] for v in row['values'])
+
+
+def test_full_covariance_keeps_sparse_warmup_identical_to_uniform(tmp_path):
+    full,args=build(tmp_path/'full',minimum_observations=None,covariance='full')
+    uniform,other=build(tmp_path/'uniform',strategy='uniform')
+    full.propose_from_archive(*args);uniform.propose_from_archive(*other)
+    a,b=[read_json(v[-1]/'adaptive-fit.json') for v in (args,other)]
+    assert not a['model_ready'] and a['reason']=='global_warmup'
+    assert a['proposals']==b['proposals']
+
+
+def test_regularized_collinear_covariance_remains_usable_at_dimension_limit():
+    from PhysicalRSI_core.self_harness.adaptive_search import _cholesky
+    # Perfectly collinear elite data, shrunk 10% toward its diagonal.
+    matrix=[[.01 if i==j else .009 for j in range(32)] for i in range(32)]
+    factor=_cholesky(matrix)
+    assert all(math.isfinite(v) for row in factor for v in row)
+    assert all(factor[i][i]>0 for i in range(32))
+    for i in range(32):
+        for j in range(32):
+            assert math.fsum(factor[i][k]*factor[j][k] for k in range(32))==pytest.approx(matrix[i][j])
+
+
+@pytest.mark.parametrize('mode',['dense',None,True,{},0])
+def test_invalid_covariance_mode_is_rejected_before_proposal(mode):
+    with pytest.raises(ValueError,match='covariance'):
+        AdaptiveParameterEvolver(archive=Archive(),space=space(),objective=demo.Objective(),
+            task_weights={t:1 for t in demo.TASKS},covariance=mode)
+
+
+def test_full_covariance_requires_representable_minimum_variance():
+    with pytest.raises(ValueError,match='minimum variance'):
+        AdaptiveParameterEvolver(archive=Archive(),space=space(),objective=demo.Objective(),
+            task_weights={t:1 for t in demo.TASKS},covariance='full',minimum_scale=1e-200)
+
+
 def test_warmup_counts_distinct_complete_vectors_not_receipts(tmp_path):
     history=[]
     for i,point in enumerate(((5.,3.),(4.,3.),(6.,4.),(5.,4.))):
@@ -186,9 +243,10 @@ def test_unknown_feedback_abstains_without_treating_it_as_failure(tmp_path):
 
 
 @pytest.mark.parametrize('boundary',['fit','rename'])
-def test_partial_candidate_pool_publication_resumes(tmp_path,monkeypatch,boundary):
+@pytest.mark.parametrize('covariance',['diagonal','full'])
+def test_partial_candidate_pool_publication_resumes(tmp_path,monkeypatch,boundary,covariance):
     from PhysicalRSI_core.self_harness import adaptive_search,search_space
-    evolver,args=build(tmp_path)
+    evolver,args=build(tmp_path,covariance=covariance)
     obj=adaptive_search if boundary=='fit' else search_space.os
     attribute='freeze_json' if boundary=='fit' else 'rename'
     original=getattr(obj,attribute)

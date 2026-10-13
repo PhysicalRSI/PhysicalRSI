@@ -197,3 +197,9 @@ uniform search. See [adaptive parameter search](../docs/core-development.md#adap
 `minimum_observations` optionally delays local sampling until enough distinct
 complete vectors are available. Its default remains `1`: the ten-seed warmup
 comparison added Trial cost without a clear quality gain over the previous policy.
+`covariance="full"` optionally retains regularized correlations between elite
+parameters while keeping their marginal spreads and global exploration. The
+default remains diagonal sampling; fit records include the matrix and factor.
+The ten-seed covariance comparison found only a small mean gain over diagonal
+sampling at higher Trial cost; uniform search remained slightly stronger and
+cheaper. This optional mode does not establish a general performance advantage.

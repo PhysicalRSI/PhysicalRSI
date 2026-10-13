@@ -131,7 +131,7 @@ class Reflector:
         return dict(schema='physicalrsi.memory-delta/v1',operations=[])
 
 
-def setup(root,*,strategy='adaptive',seed=0,rounds=4,population=6):
+def setup(root,*,strategy='adaptive',seed=0,rounds=4,population=6,covariance='diagonal',minimum_observations=1):
     if type(rounds) is not int or not 1<=rounds<=6:
         raise ValueError('Use one to six rounds in this fixed CPU protocol')
     root=Path(root).resolve()
@@ -143,7 +143,8 @@ def setup(root,*,strategy='adaptive',seed=0,rounds=4,population=6):
     state,suite,archive=HarnessState(root/'state'),Suite(),CandidateArchive(root/'archive')
     space=ParameterSpace([SearchField('control','control.json',(key,),.1,8.,precision=3) for key in ('proportional','damping')])
     evolver=AdaptiveParameterEvolver(archive=archive,space=space,objective=Objective(),task_weights={t:1 for t in TASKS},
-        population=population,seed=seed,strategy=strategy,stop_on_success=False)
+        population=population,seed=seed,strategy=strategy,stop_on_success=False,
+        covariance=covariance,minimum_observations=minimum_observations)
     memory=ResearchMemory(root/'memory')
     revision=memory.write({'trajectory-quality':dict(conditions=dict(study='adaptive-control'),
         hypothesis='Use observed error and overshoot to explore both feedback gains',required_checks=['paired-quality'],
