@@ -5,6 +5,27 @@ import pytest
 from PhysicalRSI_core.infra.trial_quota import TrialLimitExceeded, TrialQuota
 
 
+@pytest.mark.parametrize('value', [True, 1.0])
+@pytest.mark.parametrize('entry', ['reopen', 'reserve'])
+def test_quota_rejects_stored_allowance_type_drift(tmp_path, value, entry):
+    from PhysicalRSI_core.infra.storage import atomic_json, read_json
+    quota = TrialQuota(tmp_path, max_trials=1)
+    path = tmp_path / 'reservations.json'
+    saved = read_json(path)
+    atomic_json(path, dict(saved, max_trials=value))
+    before = path.read_bytes()
+    request = {'trial': {'input': 1}}
+    with pytest.raises(ValueError, match='Frozen trial allowance changed'):
+        TrialQuota(tmp_path, max_trials=1) if entry == 'reopen' else quota.reserve(request)
+    assert path.read_bytes() == before
+    atomic_json(path, saved)
+    receipt = quota.reserve(request)
+    assert quota.reserve(request) == receipt
+    assert quota.status()['reserved_trials'] == 1
+    with pytest.raises(TrialLimitExceeded):
+        quota.reserve({'another': {'input': 2}})
+
+
 def reserve_in_process(root, name, queue):
     quota = TrialQuota(root, max_trials=3)
     try:

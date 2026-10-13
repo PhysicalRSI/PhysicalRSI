@@ -48,6 +48,28 @@ def worker(root, capacity, evidence, ids):
     JobScheduler(root, capacities={"cpu": capacity}).work_once(FileHandler(evidence), ids=ids)
 
 
+@pytest.mark.parametrize('value', [True, 1.0])
+@pytest.mark.parametrize('entry', ['reopen', 'execute'])
+def test_scheduler_rejects_stored_capacity_type_drift(tmp_path, value, entry):
+    scheduler = JobScheduler(tmp_path / 'queue', capacities={'cpu': 1})
+    handler = FileHandler(tmp_path / 'effects')
+    key, = scheduler.submit([dict(name='target')], handler=handler, resources={'cpu': 1})
+    path = scheduler.root / 'queue.json'
+    original = path.read_bytes()
+    changed = read_json(path)
+    changed['identity']['capacities']['cpu'] = value
+    atomic_json(path, changed)
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match='Frozen scheduler configuration changed'):
+        JobScheduler(scheduler.root, capacities={'cpu': 1}) if entry == 'reopen' else scheduler.work_once(handler)
+    assert path.read_bytes() == before and not handler.root.exists()
+    path.write_bytes(original)
+    assert scheduler.work_once(handler) == key
+    assert scheduler.work_once(handler) is None
+    assert read_json(handler.root / 'target/calls.json') == 1
+    assert scheduler.status()['used'] == {'cpu': 0}
+
+
 def start(root, scheduler, handler, ids):
     ctx = multiprocessing.get_context("spawn")
     process = ctx.Process(target=worker, args=(scheduler.root, scheduler.capacities["cpu"], handler.root, ids))

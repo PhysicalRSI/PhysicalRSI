@@ -45,7 +45,7 @@ class JobScheduler:
 
     def _read(self):
         value = read_json(self.root / "queue.json")
-        if value["identity"] != self.identity():
+        if digest(value["identity"]) != digest(self.identity()):
             raise ValueError("Frozen scheduler configuration changed")
         for key, job in value["jobs"].items():
             if key != digest(job["request"]) or job["state"] not in {

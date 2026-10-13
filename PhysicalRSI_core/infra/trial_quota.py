@@ -32,7 +32,8 @@ class TrialQuota:
 
     def _read(self):
         ledger = read_json(self.root / "reservations.json")
-        if ledger["max_trials"] != self.max_trials:
+        if (type(ledger["max_trials"]) is not int or type(self.max_trials) is not int
+                or ledger["max_trials"] != self.max_trials):
             raise ValueError("Frozen trial allowance changed")
         if not isinstance(ledger["trials"], dict) or len(ledger["trials"]) > self.max_trials:
             raise ValueError("Invalid trial reservation ledger")
