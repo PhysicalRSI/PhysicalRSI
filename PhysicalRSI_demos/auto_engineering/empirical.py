@@ -65,8 +65,10 @@ def _panels(value):
 
 def setup(workspace, python, *, panels, strategy, seed, population=2,
           device_registry=None, resource='isaac-gpu-0', gui=False,
-          max_replacements=0, extra_trials=0, shared_cache=False):
+          max_replacements=0, extra_trials=0, shared_cache=False, elite_weighting="uniform"):
     panels = _panels(panels)
+    if elite_weighting not in ("uniform", "fractional"):
+        raise ValueError("Declare uniform or fractional elite weighting")
     if strategy not in ('adaptive', 'uniform') or type(seed) is not int:
         raise ValueError('Declare adaptive or uniform search and an integer sampler seed')
     if type(population) is not int or not 2 <= population <= 8:
@@ -87,7 +89,7 @@ def setup(workspace, python, *, panels, strategy, seed, population=2,
     evolver = AdaptiveParameterEvolver(archive=archive, space=parameter_space, objective=Objective(),
         task_weights={r.TASK:1}, population=population, seed=seed, strategy=strategy,
         minimum_observations=3, elite_fraction=.5, exploration_fraction=.5,
-        minimum_scale=.025, covariance='diagonal', stop_on_success=False)
+        minimum_scale=.025, covariance='diagonal', stop_on_success=False, elite_weighting=elite_weighting)
     revision = memory.write({'native-intended-task':dict(conditions=dict(task=r.TASK),
         hypothesis='Explore carrying height and grasp depth using complete development check panels',
         required_checks=['complete-native-transfer-and-disturbance'], counterexample_checks=[],

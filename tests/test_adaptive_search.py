@@ -118,13 +118,14 @@ def test_search_rejects_typed_provider_drift_before_reading_history(tmp_path, mo
 
 
 @pytest.mark.parametrize('score', [0., .5])
-def test_flat_feedback_keeps_global_exploration_without_arbitrary_elites(tmp_path, score):
+@pytest.mark.parametrize('elite_weighting', ['uniform', 'fractional'])
+def test_flat_feedback_keeps_global_exploration_without_arbitrary_elites(tmp_path, score, elite_weighting):
     history = []
     for index, point in enumerate(((1., 7.), (7., 1.))):
         previous = candidate(tmp_path / ('observed-' + str(index)), point)
         history.extend(rows(previous, values(tmp_path / ('history-' + str(index)), previous)))
     objective = PanelObjective(default=score)
-    adaptive, args = build(tmp_path / 'adaptive', history=history, objective=objective, minimum_observations=3)
+    adaptive, args = build(tmp_path / 'adaptive', history=history, objective=objective, minimum_observations=3, elite_weighting=elite_weighting)
     uniform, control = build(tmp_path / 'uniform', history=history, objective=objective,
                              minimum_observations=3, strategy='uniform')
     adaptive.propose_from_archive(*args)
@@ -136,13 +137,14 @@ def test_flat_feedback_keeps_global_exploration_without_arbitrary_elites(tmp_pat
     assert all(row['role'] == 'global' for row in a['proposals'])
 
 
-def test_tied_elite_cutoff_includes_both_parameter_directions(tmp_path):
+@pytest.mark.parametrize('elite_weighting', ['uniform', 'fractional'])
+def test_tied_elite_cutoff_includes_both_parameter_directions(tmp_path, elite_weighting):
     history = []
     for name, point in [('tied-a', (1., 7.)), ('tied-b', (7., 1.)), ('inferior', (2., 2.))]:
         previous = candidate(tmp_path / name, point)
         history.extend(rows(previous, values(tmp_path / (name + '-trials'), previous)))
     objective = PanelObjective({'tied-a': .8, 'tied-b': .8, 'inferior': .2})
-    evolver, args = build(tmp_path / 'study', history=history, objective=objective, elite_fraction=.25)
+    evolver, args = build(tmp_path / 'study', history=history, objective=objective, elite_fraction=.25, elite_weighting=elite_weighting)
     evolver.propose_from_archive(*args)
     fit = read_json(args[-1] / 'adaptive-fit.json')
     assert fit['model_ready']
@@ -151,11 +153,12 @@ def test_tied_elite_cutoff_includes_both_parameter_directions(tmp_path):
 
 
 @pytest.mark.parametrize('covariance', ['diagonal', 'full'])
-def test_single_elite_respects_minimum_exploration_scale(tmp_path, covariance):
+@pytest.mark.parametrize('elite_weighting', ['uniform', 'fractional'])
+def test_single_elite_respects_minimum_exploration_scale(tmp_path, covariance, elite_weighting):
     previous = candidate(tmp_path / 'best', (5., 3.))
     history = rows(previous, values(tmp_path / 'history', previous))
     evolver, args = build(tmp_path / 'study', history=history,
-        objective=PanelObjective({'best': 1.}), minimum_scale=.6, covariance=covariance)
+        objective=PanelObjective({'best': 1.}), minimum_scale=.6, covariance=covariance, elite_weighting=elite_weighting)
     evolver.propose_from_archive(*args)
     fit = read_json(args[-1] / 'adaptive-fit.json')
     assert fit['model_ready'] and len(fit['elite']) == 1
@@ -555,3 +558,52 @@ def test_changed_development_cases_are_explicitly_excluded_before_scoring(tmp_pa
     assert {row['trial_sha256'] for row in fit['excluded']} == {row['evaluation']['trial_sha256'] for row in history}
     assert all(row['case']['target'] == 2. and row['source']['archive_revision'] == 'history'
                for row in fit['excluded'])
+
+
+@pytest.mark.parametrize('covariance', ['diagonal', 'full'])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_fractional_elites_preserve_rank_mass_at_tied_cutoff(tmp_path, covariance, reverse):
+    history = []
+    for name, point in [('best', (7., 7.)), ('boundary', (1., 1.))]:
+        previous = candidate(tmp_path / name, point)
+        history.extend(rows(previous, values(tmp_path / (name + '-trials'), previous)))
+    if reverse:
+        history.reverse()
+    objective = PanelObjective({'best': 1.}, default=.2)
+    evolver, args = build(tmp_path / 'study', history=history, objective=objective,
+        elite_fraction=.5, elite_weighting='fractional', covariance=covariance)
+    evolver.propose_from_archive(*args)
+    fit = read_json(args[-1] / 'adaptive-fit.json')
+    assert len(fit['elite']) == 3
+    assert fit['elite_weights'] == [.5, .25, .25]
+    points = [space().unit(v) for v in [(7., 7.), (.3, .1), (1., 1.)]]
+    expected = [sum(w*p[i] for w,p in zip([.5, .25, .25], points)) for i in range(2)]
+    assert fit['center'] == pytest.approx(expected)
+    variance = [sum(w*(p[i]-expected[i])**2 for w,p in zip([.5, .25, .25], points)) for i in range(2)]
+    assert fit['scale'] == pytest.approx([math.sqrt(v) for v in variance])
+    if covariance == 'full':
+        cross = .9*sum(w*(p[0]-expected[0])*(p[1]-expected[1]) for w,p in zip([.5, .25, .25], points))
+        assert fit['covariance'][0][1] == pytest.approx(cross)
+    # Explicit uniform weighting retains the original equal-weight fit.
+    control, other = build(tmp_path / 'control', history=history, objective=objective,
+        elite_fraction=.5, elite_weighting='uniform', covariance=covariance)
+    control.propose_from_archive(*other)
+    old = read_json(other[-1] / 'adaptive-fit.json')
+    assert old['elite_weights'] == [1/3]*3
+    assert fit['proposals'][:2] == old['proposals'][:2]
+
+
+def test_sampling_stream_ignores_runtime_location_but_keeps_feedback_context(tmp_path):
+    fits = []
+    for label in ('first-cache', 'second-cache'):
+        class Located(demo.Environment):
+            def identity(self):
+                return dict(super().identity(), runtime_cache=str(tmp_path / label))
+        evolver, args = build(tmp_path / label)
+        parent, _, context, search, output = args
+        evaluations = values(tmp_path / (label + '-trials'), parent, environment_factory=Located)
+        evolver.propose_from_archive(parent, evaluations, context, search, output)
+        fits.append(read_json(output / 'adaptive-fit.json'))
+    assert fits[0]['panel'] != fits[1]['panel']
+    assert fits[0]['random_seed'] == fits[1]['random_seed']
+    assert fits[0]['proposals'] == fits[1]['proposals']

@@ -1590,6 +1590,18 @@ scores are equal, the whole population explores globally. A flat score panel
 does not provide an evidence-based direction for local search. All vectors tied
 at the elite cutoff are included, rather than selecting ties by coordinate order.
 The declared minimum spread also applies when only one elite is available.
+Optional `elite_weighting="fractional"` shares the remaining top-rank slots
+equally among observations tied at the elite cutoff. For scores `[1, .2, .2]`
+and an elite fraction of `.5`, normalized weights become `[.5, .25, .25]`
+instead of three equal weights. Weighted moments apply to both diagonal and
+full covariance; equal-weight cases retain the original fit arithmetic. The
+default remains `uniform`. This is an experimental proposal policy, with no
+measured task-performance advantage established yet.
+Proposal random streams bind the declared sampler seed, round, task cases and
+controller condition. Runtime locations embedded in measurement identities no
+longer perturb those streams. The complete measurement context still gates
+which historical feedback may enter fitting; shared random draws do not make
+incompatible feedback reusable. Fits record `sampling_panel` separately.
 Within-case repeat averages and within-task case averages use exact-ratio
 accumulation before conversion back to a float. Identical scores remain equal
 when repeat counts differ, and archive iteration order does not alter those

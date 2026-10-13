@@ -35,13 +35,16 @@ def _cholesky(covariance):
 class AdaptiveParameterEvolver:
     def __init__(self,*,archive,space,objective,task_weights,population=6,seed=0,
                  elite_fraction=.25,exploration_fraction=.5,minimum_scale=.025,
-                 strategy='adaptive',stop_on_success=True,minimum_observations=1,covariance='diagonal'):
+                 strategy='adaptive',stop_on_success=True,minimum_observations=1,covariance='diagonal',
+                 elite_weighting='uniform'):
         if not isinstance(space,ParameterSpace):
             raise ValueError('Declare a ParameterSpace')
         if minimum_observations is None:
             minimum_observations=2*len(space.fields)+1
         if type(minimum_observations) is not int or minimum_observations<1:
             raise ValueError('Declare a positive integer minimum_observations')
+        if elite_weighting not in ('uniform','fractional'):
+            raise ValueError('Declare uniform or fractional elite weighting')
         if covariance not in ('diagonal','full'):
             raise ValueError('Declare diagonal or full proposal covariance')
         if (type(population) is not int or not 1<=population<=64 or type(seed) is not int
@@ -56,7 +59,8 @@ class AdaptiveParameterEvolver:
         self.weights=deepcopy(task_weights)
         self.settings=dict(population=population,seed=seed,elite_fraction=elite_fraction,
             exploration_fraction=exploration_fraction,minimum_scale=minimum_scale,strategy=strategy,
-            stop_on_success=stop_on_success,minimum_observations=minimum_observations,covariance=covariance)
+            stop_on_success=stop_on_success,minimum_observations=minimum_observations,covariance=covariance,
+            elite_weighting=elite_weighting)
         self._identity=deepcopy(self.identity())
 
     def identity(self):
@@ -146,9 +150,22 @@ class AdaptiveParameterEvolver:
         # Equal measured scores do not justify preferring smaller coordinates.
         elite=[row for row in ranked if row['score']>=elite_cutoff]
         units=[self.space.unit(r['values']) for r in elite]
+        elite_weights=[1./len(elite)] * len(elite) if elite else []
+        if elite and self.settings['elite_weighting']=='fractional':
+            # Split the remaining rank slots equally across a tied boundary.
+            # Adding ties must not give that score tier extra total weight.
+            above=sum(row['score']>elite_cutoff for row in elite)
+            boundary=(elite_count-above)/(len(elite)-above)
+            elite_weights=[(1. if row['score']>elite_cutoff else boundary)/elite_count for row in elite]
+        weighted_fit=len(set(elite_weights))>1
         center=[sum(v[i] for v in units)/len(units) for i in range(len(self.space.fields))] if units else self.space.unit(inspected['values'])
         scale=[max(self.settings['minimum_scale'],math.sqrt(sum((v[i]-center[i])**2 for v in units)/len(units)))
                if len(units)>1 else max(self.settings['minimum_scale'],.25) for i in range(len(center))]
+        if weighted_fit:
+            center=[math.fsum(w*v[i] for w,v in zip(elite_weights,units)) for i in range(len(center))]
+            if len(units)>1:
+                scale=[max(self.settings['minimum_scale'],math.sqrt(math.fsum(
+                    w*(v[i]-center[i])**2 for w,v in zip(elite_weights,units)))) for i in range(len(center))]
         covariance=[[scale[i]**2 if i==j else 0. for j in range(len(center))] for i in range(len(center))]
         factor=None
         if self.settings['covariance']=='full':
@@ -160,8 +177,15 @@ class AdaptiveParameterEvolver:
                     for j in range(i):
                         covariance[i][j]=covariance[j][i]=.9*math.fsum(
                             (v[i]-center[i])*(v[j]-center[j]) for v in units)/len(units)
+                        if weighted_fit:
+                            covariance[i][j]=covariance[j][i]=.9*math.fsum(
+                                w*(v[i]-center[i])*(v[j]-center[j]) for w,v in zip(elite_weights,units))
             factor=_cholesky(covariance)
-        rng_seed=digest(dict(seed=self.settings['seed'],round=context['index'],panel=panel,condition=inspected['condition_sha256']))
+        # Random streams bind task cases and controller conditions, not runtime
+        # locations embedded in measurement identities. Feedback comparability
+        # still uses the complete panel above.
+        sampling_panel={case:row['task'] for case,row in panel.items()}
+        rng_seed=digest(dict(seed=self.settings['seed'],round=context['index'],panel=sampling_panel,condition=inspected['condition_sha256']))
         rng=Random(int(rng_seed,16))
         proposals=[]
         reason='sample_development_distribution'
@@ -194,10 +218,10 @@ class AdaptiveParameterEvolver:
         report=dict(schema='physicalrsi.adaptive-parameter-fit/v1',identity=self.identity(),
             parent_sha256=verify_harness(parent),condition_sha256=inspected['condition_sha256'],
             archive_view_sha256=digest(search['view']),panel=panel,samples=samples,excluded=excluded,
-            ranked=ranked,incomplete=incomplete,elite=elite,elite_cutoff=elite_cutoff,
+            ranked=ranked,incomplete=incomplete,elite=elite,elite_cutoff=elite_cutoff,elite_weights=elite_weights,
             center=center,scale=scale,model_ready=model_ready,score_contrast=score_contrast,
             covariance=covariance,covariance_factor=factor,
-            random_seed=rng_seed,proposals=proposals,reason=reason,qualification=None)
+            random_seed=rng_seed,sampling_panel=sampling_panel,proposals=proposals,reason=reason,qualification=None)
         output=Path(output)
         freeze_json(output/'adaptive-fit.json',report)
         self._stable()
