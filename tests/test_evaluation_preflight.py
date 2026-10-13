@@ -82,3 +82,31 @@ def test_frozen_artifact_accepts_equivalent_json_sequences_and_key_order(tmp_pat
     freeze_json(path, {'name': 'same', 'values': [1, True]})
     freeze_json(path, {'values': (1, True), 'name': 'same'})
     assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize('before,after', [(1, True), (True, 1), (1, 1.0), (False, 0)])
+def test_evaluator_rejects_suite_identity_type_drift_before_sampling(tmp_path, monkeypatch, before, after):
+    from PhysicalRSI_core.embodiment import Revision
+    from PhysicalRSI_core.experiments import Budget
+    from PhysicalRSI_core.self_harness.evaluation import ExperimentEvaluator
+    _, parent, suite, quota = setup(tmp_path)
+    settings = {'mode': before}
+    identity = suite.identity()
+    monkeypatch.setattr(suite, 'identity', lambda: dict(identity, settings=settings))
+    evaluator = ExperimentEvaluator(suite=suite, budgets={'counter': Budget(8, 30)},
+        scope='software', system2=Revision('typed-suite', '1'), quota=quota)
+    settings['mode'] = after
+    assert evaluator.identity() == evaluator._identity
+    output = tmp_path / 'typed-evaluation'
+    with monkeypatch.context() as patch:
+        patch.setattr(suite, 'development_cases', lambda parent: pytest.fail('Changed suite must not sample'))
+        with pytest.raises(ValueError, match='evaluator identity changed'):
+            evaluator.development(parent, output)
+    assert not output.exists()
+    assert suite.resets == [] and quota.status()['reserved_trials'] == 0
+    settings['mode'] = before
+    result = evaluator.development(parent, output)
+    assert len(result['episodes']) == 1
+    assert len(suite.resets) == quota.status()['reserved_trials'] == 1
+    assert evaluator.development(parent, output) == result
+    assert len(suite.resets) == 1

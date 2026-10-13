@@ -83,7 +83,7 @@ class ExperimentEvaluator:
                     }.items()}))
 
     def _stable(self):
-        if self.identity() != self._identity:
+        if digest(self.identity()) != self.revision:
             raise ValueError("Experiment evaluator identity changed")
 
     def policy_identity(self):

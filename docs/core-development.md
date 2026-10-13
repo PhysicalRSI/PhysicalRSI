@@ -297,6 +297,9 @@ Trial types, artifact capture, evidence reading, embodiment, timing, device
 ownership and storage. The evaluator additionally binds its own planning,
 scoring, rollout and harness-artifact code. Every identity check reads current
 source bytes; changing a helper cannot preserve the old evaluator revision.
+The evaluator compares the canonical JSON identity digest to its frozen revision,
+so boolean, integer and floating-point substitutions cannot pass as unchanged
+configuration merely because Python considers their values equal.
 A change before reservation blocks the whole plan; a change during adapter
 construction blocks reset while retaining the already charged reservation.
 
