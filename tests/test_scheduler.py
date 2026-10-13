@@ -238,3 +238,34 @@ def test_submit_error_preserves_ownership_until_executor_is_quiescent(tmp_path, 
         with pytest.raises(ReconciliationRequired):
             scheduler.recover_completed(ids[0], handler)
         assert scheduler.work_once(handler) is None
+
+
+@pytest.mark.parametrize('change_after', ['first', 'last'])
+def test_submit_freezes_one_handler_for_the_entire_batch(tmp_path, change_after):
+    scheduler = JobScheduler(tmp_path / 'queue', capacities={'cpu': 1})
+    handler = FileHandler(tmp_path / 'effects')
+    existing = scheduler.submit([dict(name='existing')], handler=handler, resources={'cpu': 1})
+    before = (scheduler.root / 'queue.json').read_bytes()
+    original_root = handler.root
+
+    def payloads():
+        yield dict(name='first')
+        if change_after == 'first':
+            handler.root = tmp_path / 'different-effects'
+        yield dict(name='second')
+        if change_after == 'last':
+            handler.root = tmp_path / 'different-effects'
+
+    with pytest.raises(ValueError, match='handler identity changed'):
+        scheduler.submit(payloads(), handler=handler, resources={'cpu': 1})
+    assert (scheduler.root / 'queue.json').read_bytes() == before
+    assert not original_root.exists() and not handler.root.exists()
+    assert scheduler.status()['used'] == {'cpu': 0}
+    handler.root = original_root
+    stable = [dict(name='first'), dict(name='second')]
+    ids = scheduler.submit(iter(stable), handler=handler, resources={'cpu': 1})
+    assert scheduler.submit(stable, handler=handler, resources={'cpu': 1}) == ids
+    assert [r['value'] for r in scheduler.run_until(ids, handler)] == ['first', 'second']
+    assert all(read_json(handler.root / name / 'calls.json') == 1 for name in ('first', 'second'))
+    assert scheduler.status(existing)['jobs'][existing[0]]['state'] == 'queued'
+    assert scheduler.status()['used'] == {'cpu': 0}

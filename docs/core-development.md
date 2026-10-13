@@ -598,7 +598,11 @@ still owns that contract and the completeness of its evidence checks.
 
 `infra.scheduler.JobScheduler` persists queued inputs, verified results and
 resource reservations outside campaign evidence. `submit` is idempotent for
-identical payloads, handler identities and resource requests. `work_once` lets
+identical payloads, handler identities and resource requests. Each submitted
+batch snapshots one handler identity before consuming its inputs and rechecks
+it under the queue lock before adding any jobs. A configuration change during
+input iteration rejects the whole batch without changing the existing ledger.
+`work_once` lets
 independent cooperating local processes claim fitting work; `run_until` provides
 a bounded thread dispatcher and returns verified results in requested order.
 Higher numeric priorities dispatch first among requests that fit. A large

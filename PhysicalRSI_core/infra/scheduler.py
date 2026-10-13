@@ -87,13 +87,15 @@ class JobScheduler:
                 or any(k not in self.capacities or type(v) is not int or not 1 <= v <= self.capacities[k]
                        for k, v in resources.items())):
             raise ValueError("Job resource request exceeds configured capacity")
-        requests = [_json(dict(payload=p, handler=handler.identity(),
+        handler_identity = _json(handler.identity())
+        requests = [_json(dict(payload=p, handler=handler_identity,
                          resources=resources, priority=priority)) for p in payloads]
         ids = [digest(request) for request in requests]
         if not ids or len(ids) != len(set(ids)):
             raise ValueError("Submit a nonempty set of distinct jobs")
         with locked(self.root / ".lock"):
             ledger = self._read()
+            self._handler(dict(handler=handler_identity), handler)
             for key, request in zip(ids, requests):
                 if key not in ledger["jobs"]:
                     ledger["jobs"][key] = dict(request=request, state="queued", submitted=len(ledger["jobs"]))
