@@ -50,7 +50,8 @@ def run(args):
     extra_args = []
     if getattr(args, 'runtime_root', None):
         extra_args = ['--portable', '--portable-root', str(Path(args.runtime_root).resolve())]
-    app = SimulationApp({'headless':not args.gui, 'width':1920, 'height':1080,
+    app = SimulationApp({'headless':not args.gui, 'disable_viewport_updates':not args.gui,
+                         'width':1920, 'height':1080,
                          'renderer':'RayTracedLighting', 'anti_aliasing':2,
                          'multi_gpu':False, 'extra_args':extra_args})
     try:

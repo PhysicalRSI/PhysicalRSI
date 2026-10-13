@@ -1996,3 +1996,57 @@ seconds, two static captures each. Both reservations were charged and the device
 registry was empty afterward. The exact implementation also passed 890 software
 tests in 169.18 seconds (`core-static-capture-001`). These acceptance results do
 not replace the interrupted benchmark or prove intermittent-crash elimination.
+
+### Second matched native pilot interrupted, 2026-10-14
+
+`native-matched-bench-002` froze source `0abb6e162cedb218e877b34da1c0e69175d9d808`,
+fractional elite weighting and new disjoint panels: development 2026101600,
+validation 2026101601–1602 and 2026101603–1604, test 2026101610–1613.
+Both first-round global candidates passed the development case and both first
+validation cases; the initial harness failed all three. Core inherited
+`(transit_height_m=0.383, grasp_depth_fraction=0.349)`, retaining the other
+candidate and initial harness in the archive. An archive audit verified each
+retained harness hash.
+
+The second round fitted four completed development measurements across three
+parameter vectors, including a repeated measurement of the inherited harness.
+A receipt-level audit confirmed that no validation or test case entered fitting.
+It proposed global `(0.292, 0.359)` and fitted `(0.428, 0.231)` candidates. The
+global candidate passed development, but the fitted candidate never reached
+policy execution: its native worker exited with SIGSEGV (-11) during the
+90-step settling loop, before static sensor capture. The Python stack points to
+`World.step -> SimulationContext.step`; native frames again include
+`UsdGeomBBoxCache::SetTime`. Thus static capture did not eliminate the underlying
+native crash, whose cause remains unresolved.
+
+The frozen study stopped with 11 completed Trials (8 successes, 3 failures) and
+one `needs_reconciliation` Trial. Uniform search and all final tests were not
+executed, so no final benchmark score or strategy comparison is available. No
+replacement was run. After confirming driver and worker-group exit and an empty
+GPU compute-process list, the device lease was reconciled for resource reuse;
+the uncertain Trial was not rewritten as a measured task failure. Evidence is
+retained in `interruption-audit.json`, `device-reconciliation.json`,
+`first-round-archive-audit.json` and `round-two-feedback-audit.json` under the
+study root.
+
+### Headless viewport diagnostic, 2026-10-14
+
+`native-viewport-diagnostic-001` completed four fresh native Trials in ABBA
+order (viewport off/on/on/off), with two paired development seeds
+2026101700–1701, fixed memory and separate cold caches. All four passed seven
+independently recomputed geometry checks and completed 1,576 physics steps.
+Within each pair, layouts and policy memory were identical. Camera frames were
+available and static sensor warmup preserved the settled physics timestamp.
+`comparison.json` retains receipt hashes, checks and phase timings.
+
+Viewport-off elapsed times were 231.75 and 229.18 seconds, versus 241.47 and
+234.22 seconds with viewport updates enabled. The observed mean reduction was
+7.38 seconds (about 3.1%); two pairs with runtime/cache variation do not establish
+a general speedup or elimination of intermittent USD crashes. The native adapter
+now disables viewport updates only in headless mode, retaining camera rendering
+and GUI viewport updates. This follows Isaac Sim's documented headless
+performance configuration. This diagnostic is not a replacement benchmark or
+evidence of adaptive search outperforming uniform search.
+Integration auditing confirmed the worker matches the native-tested viewport-off
+variant apart from the diagnostic print and configuration key order. All four
+sensor contract tests passed; the device registry was empty after the diagnostic.
