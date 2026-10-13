@@ -140,3 +140,101 @@ def test_impossible_resources_and_configuration_changes_precede_dispatch(tmp_pat
     with pytest.raises(ValueError, match="configuration"):
         JobScheduler(scheduler.root, capacities={"cpu": 2})
     assert not handler.root.exists() and scheduler.status()["jobs"] == {}
+
+
+@pytest.mark.parametrize('expiry', ['reservation', 'owner'])
+def test_dispatch_deadline_stops_new_effects_and_allows_explicit_resume(tmp_path, monkeypatch, expiry):
+    from PhysicalRSI_core.infra import scheduler as module
+    scheduler = JobScheduler(tmp_path / 'queue', capacities={'cpu': 2})
+    handler = FileHandler(tmp_path / 'effects')
+    ids = scheduler.submit([dict(name='first'), dict(name='second')],
+                           handler=handler, resources={'cpu': 1})
+    clock = [0.]
+    in_claim = [False]
+    claim, save, owner = scheduler._claim, scheduler._save, scheduler._owner
+
+    def claiming(*args, **kwargs):
+        in_claim[0] = True
+        try:
+            return claim(*args, **kwargs)
+        finally:
+            in_claim[0] = False
+
+    def slow_save(ledger):
+        save(ledger)
+        if in_claim[0] and expiry == 'reservation':
+            clock[0] = 2.
+
+    def slow_owner(key):
+        result = owner(key)
+        if in_claim[0] and expiry == 'owner':
+            clock[0] = 2.
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(module, 'monotonic', lambda: clock[0])
+        patch.setattr(scheduler, '_claim', claiming)
+        patch.setattr(scheduler, '_save', slow_save)
+        patch.setattr(scheduler, '_owner', slow_owner)
+        with pytest.raises(TimeoutError, match='Observation deadline'):
+            scheduler.run_until(ids, handler, workers=2, wait_seconds=1.)
+    status = scheduler.status()
+    expected = ['completed', 'queued'] if expiry == 'reservation' else ['queued', 'queued']
+    assert [status['jobs'][key]['state'] for key in ids] == expected
+    assert status['used'] == {'cpu': 0}
+    assert not any(job['owner_active'] for job in status['jobs'].values())
+    assert not (handler.root / 'second/calls.json').exists()
+    if expiry == 'owner':
+        assert not handler.root.exists()
+    assert [row['value'] for row in scheduler.run_until(ids, handler, workers=2)] == ['first', 'second']
+    assert all(read_json(handler.root / name / 'calls.json') == 1 for name in ('first', 'second'))
+
+
+@pytest.mark.parametrize('accepted', [True, False])
+def test_submit_error_preserves_ownership_until_executor_is_quiescent(tmp_path, monkeypatch, accepted):
+    from threading import Event
+    from PhysicalRSI_core.infra import scheduler as module
+    started, release = Event(), Event()
+
+    class HeldHandler(FileHandler):
+        def execute(self, payload):
+            started.set()
+            assert release.wait(5), 'executor did not release test worker'
+            return super().execute(payload)
+
+    scheduler = JobScheduler(tmp_path / 'queue', capacities={'cpu': 1})
+    handler = HeldHandler(tmp_path / 'effects')
+    ids = scheduler.submit([dict(name='job')], handler=handler, resources={'cpu': 1})
+    observations = []
+
+    class AmbiguousExecutor(module.ThreadPoolExecutor):
+        def submit(self, *args, **kwargs):
+            if accepted:
+                super().submit(*args, **kwargs)
+                assert started.wait(5), 'test worker did not start'
+            raise RuntimeError('injected submission failure')
+
+        def shutdown(self, *args, **kwargs):
+            if not observations:
+                observations.append(scheduler.status()['jobs'][ids[0]]['owner_active'])
+            release.set()
+            return super().shutdown(*args, **kwargs)
+
+    monkeypatch.setattr(module, 'ThreadPoolExecutor', AmbiguousExecutor)
+    with pytest.raises(RuntimeError, match='injected submission failure'):
+        scheduler.run_until(ids, handler)
+    assert observations == [True]
+    status = scheduler.status()
+    assert not status['jobs'][ids[0]]['owner_active']
+    if accepted:
+        assert status['jobs'][ids[0]]['state'] == 'completed'
+        assert status['used'] == {'cpu': 0}
+        assert scheduler.recover_completed(ids[0], handler)['value'] == 'job'
+        assert read_json(handler.root / 'job/calls.json') == 1
+    else:
+        assert status['jobs'][ids[0]]['state'] == 'running'
+        assert status['used'] == {'cpu': 1}
+        assert not handler.root.exists()
+        with pytest.raises(ReconciliationRequired):
+            scheduler.recover_completed(ids[0], handler)
+        assert scheduler.work_once(handler) is None

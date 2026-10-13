@@ -112,8 +112,10 @@ class JobScheduler:
                     owner.close()
             return dict(jobs=jobs, used=self._used(ledger), capacities=deepcopy(self.capacities))
 
-    def _claim(self, handler, ids=None):
+    def _claim(self, handler, ids=None, *, deadline=None):
         with locked(self.root / ".lock"):
+            if deadline is not None and monotonic() >= deadline:
+                return None
             ledger = self._read()
             allowed = set(ledger["jobs"] if ids is None else ids)
             used = self._used(ledger)
@@ -130,6 +132,11 @@ class JobScheduler:
                 if owner is None:
                     continue
                 try:
+                    # Lock acquisition and queue inspection can consume the
+                    # remaining observation budget. Do not reserve new work.
+                    if deadline is not None and monotonic() >= deadline:
+                        owner.close()
+                        return None
                     job.update(state="running")
                     self._save(ledger)
                     return key, deepcopy(request), owner
@@ -321,12 +328,15 @@ class JobScheduler:
                 if monotonic() >= deadline:
                     raise TimeoutError("Observation deadline reached; inspect the existing jobs")
                 while len(futures) < workers:
-                    claim = self._claim(handler, ids)
+                    claim = self._claim(handler, ids, deadline=deadline)
                     if claim is None:
                         break
                     try:
                         futures.add(pool.submit(self._execute, claim, handler))
                     except BaseException:
+                        # submit() may enqueue work before failing to start a
+                        # thread. Keep ownership until all possible workers stop.
+                        pool.shutdown(wait=True)
                         claim[2].close()
                         raise
                 if futures:

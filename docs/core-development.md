@@ -604,6 +604,15 @@ the failed input and does not clear a device lease or authorize replay. Live
 owners cannot be recovered or abandoned. Observation timeouts do not expire
 ownership; owned threads are joined before the dispatcher returns, so adapters
 must honor their own execution budgets.
+Each `run_until` claim rechecks its observation deadline while holding the queue
+lock and again after acquiring the owner lock, before reserving a new job. Slow
+queue I/O or lock acquisition cannot authorize another dispatch after expiry.
+Already reserved work is joined; untouched jobs stay queued and a later explicit
+`run_until` can finish them without rerunning completed inputs.
+An executor submission error does not prove that work never started. The
+dispatcher joins the executor before releasing that claim's owner lock; verified
+completed evidence remains recoverable without replay. If no complete evidence
+exists, the durable reservation still requires explicit reconciliation.
 
 `self_harness.scheduled.ScheduledEvaluator` adds the optional
 `evaluate_pool`/`resume_evaluation_pool` port to `ExperimentEvaluator`. The
