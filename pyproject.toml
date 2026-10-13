@@ -20,6 +20,7 @@ mcp = ["mcp>=1.23,<2"]
 dataset = ["numpy>=1.26,<3", "lerobot>=0.3.3,<0.4"]
 dexjoco = ["numpy>=1.26,<3", "Pillow>=10,<13", "zarr>=2.18,<3", "numcodecs>=0.12,<0.16"]
 test = ["pytest>=8,<10", "numpy>=1.26,<3", "Pillow>=10,<12", "scipy>=1.11,<2"]
+test-parallel = ["pytest-xdist>=3.8,<4"]
 
 [tool.setuptools.packages.find]
 include = ["PhysicalRSI*", "examples*"]

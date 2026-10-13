@@ -1761,3 +1761,20 @@ This is one sequential cold/warm pair on one known case, with no randomized
 control or repetition; OS caching and run-order effects are not separated.
 It establishes successful cross-root cache reuse with lower observed reset cost,
 not a general speedup guarantee. Shared caching remains explicitly opt-in.
+
+### Software regression scheduling measurement
+
+The same 792-test source at `77b4598` passed serial execution in 231.48 seconds
+and two-process execution in 131.62 seconds with pytest-xdist 3.8.0 and execnet
+2.1.1 (`-n 2 --dist=loadfile`). Both ran from immutable RAM source snapshots with
+separate RAM temporary directories. All 224 tracked Python files in the core,
+demos and tests matched the worktree; the available CPU affinity contained 12
+CPUs. The observed reduction was 43.1%, without dropping tests or running Isaac.
+This single comparison does not guarantee the same speedup on other machines
+or shared-filesystem checkouts. Logs and the source manifest are retained at
+`/cpfs02/user/yanming/physicalrsi-core-checks/core-parallel-check-001`.
+
+The `test-parallel` extra makes this mode optional. Keep two workers as the
+measured starting point, preserve per-worker temporary-directory isolation, and
+inspect failures before changing concurrency or rerunning tests. Native device
+leases, rollout quotas and physical acceptance scheduling remain separate.

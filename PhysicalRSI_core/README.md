@@ -100,6 +100,22 @@ require their separate reconciliation workflow.
 
 Deadlines are cooperative. Adapters must bound device calls and honor `Context.check()`. Physical declarations require named resources and an explicitly shared `infra.devices.DeviceRegistry`. Its leases coordinate cooperating processes on one local controller host, retain uncertain ownership across interruption, and require confirmed quiescence before release. They do not stop hardware or fence another controller host. The runtime verifies local evidence and identity consistency; it cannot guarantee sensor accuracy, verifier accuracy, physical reproducibility or process isolation.
 
+## Software validation
+
+For software regression, install the optional parallel test dependency with
+`python -m pip install -e '.[test,test-parallel]'` and run from the repository root:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider -n 2 --dist=loadfile tests
+```
+
+Two isolated worker processes distribute whole test files. Omitting `-n 2`
+retains serial execution. Use focused tests during development and one full
+regression at a publication milestone. On slow shared filesystems, an immutable
+source snapshot and temporary directories on local storage can reduce I/O; run
+from that snapshot so imports use it too. Software tests do not replace native
+rollout acceptance when adapters or physical behavior change.
+
 ## Self-Harness
 
 The original preview release's `self_harness/` is retained. Its injected proposal, evaluation and selection ports perform:
