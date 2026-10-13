@@ -613,6 +613,10 @@ independent cooperating local processes claim fitting work; `run_until` provides
 a bounded thread dispatcher and returns verified results in requested order.
 Higher numeric priorities dispatch first among requests that fit. A large
 blocked request does not prevent smaller fitting requests from running.
+Each claim scans queued jobs against one freshly observed handler identity;
+unrelated jobs do not cause repeated handler implementation hashing. This
+observation is not cached across claims. Execution and collection still check
+the handler identity before and after each callback.
 
 Configure capacities explicitly, such as `{"cpu": 2}`. These are scheduling
 allowances, not inferred hardware capacity, enforced memory limits or cluster

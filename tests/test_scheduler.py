@@ -269,3 +269,47 @@ def test_submit_freezes_one_handler_for_the_entire_batch(tmp_path, change_after)
     assert all(read_json(handler.root / name / 'calls.json') == 1 for name in ('first', 'second'))
     assert scheduler.status(existing)['jobs'][existing[0]]['state'] == 'queued'
     assert scheduler.status()['used'] == {'cpu': 0}
+
+
+def test_queue_scan_observes_handler_once_without_caching_across_claims(tmp_path, monkeypatch):
+    scheduler = JobScheduler(tmp_path / 'queue', capacities={'cpu': 1})
+    other = FileHandler(tmp_path / 'other-effects')
+    handler = FileHandler(tmp_path / 'effects')
+    queued = scheduler.submit([dict(name=str(i)) for i in range(64)],
+                              handler=other, resources={'cpu': 1})
+    target, = scheduler.submit([dict(name='target')], handler=handler, resources={'cpu': 1})
+    identity = handler.identity
+    observations = []
+
+    def observe():
+        observations.append(str(handler.root))
+        return identity()
+
+    monkeypatch.setattr(handler, 'identity', observe)
+    assert scheduler.work_once(handler) == target
+    # One observation for scanning, plus before/after execute and collect.
+    assert observations == [str(handler.root)] * 5
+    assert read_json(handler.root / 'target/calls.json') == 1
+    assert all(job['state'] == 'queued' for job in scheduler.status(queued)['jobs'].values())
+    observations.clear()
+    handler.root = other.root
+    assert scheduler.work_once(handler) == queued[0]
+    assert observations == [str(other.root)] * 5
+    assert read_json(other.root / '0/calls.json') == 1
+    assert scheduler.status()['used'] == {'cpu': 0}
+
+
+def test_handler_change_after_claim_stops_execution_and_keeps_reservation(tmp_path):
+    scheduler = JobScheduler(tmp_path / 'queue', capacities={'cpu': 1})
+    handler = FileHandler(tmp_path / 'effects')
+    key, = scheduler.submit([dict(name='target')], handler=handler, resources={'cpu': 1})
+    claim = scheduler._claim(handler)
+    original = handler.root
+    handler.root = tmp_path / 'changed-effects'
+    with pytest.raises(ValueError, match='handler identity changed'):
+        scheduler._execute(claim, handler)
+    assert not original.exists() and not handler.root.exists()
+    status = scheduler.status()
+    assert status['jobs'][key]['state'] == 'needs_reconciliation'
+    assert not status['jobs'][key]['owner_active']
+    assert status['used'] == {'cpu': 1}

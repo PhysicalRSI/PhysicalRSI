@@ -123,10 +123,14 @@ class JobScheduler:
             used = self._used(ledger)
             jobs = sorted(ledger["jobs"].items(), key=lambda item: (
                 -item[1]["request"]["priority"], item[1]["submitted"]))
+            handler_sha = None
             for key, job in jobs:
                 request = job["request"]
-                if (key not in allowed or job["state"] != "queued"
-                        or digest(request["handler"]) != digest(_json(handler.identity()))):
+                if key not in allowed or job["state"] != "queued":
+                    continue
+                if handler_sha is None:
+                    handler_sha = digest(_json(handler.identity()))
+                if digest(request["handler"]) != handler_sha:
                     continue
                 if any(used[k] + v > self.capacities[k] for k, v in request["resources"].items()):
                     continue
