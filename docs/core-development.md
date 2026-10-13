@@ -1047,6 +1047,11 @@ The coordinator owns deep snapshots of requests and provider replies before the
 next callback. Later provider mutations of nested handle/status/result objects
 cannot rewrite the provenance being published. Normal submission and recovery
 after a lost reply both retain the values recorded in the durable job receipts.
+Resuming a completed training workspace checks its submission, terminal and
+collection receipts against the checkpoint's owned provenance without calling
+the provider. Missing or conflicting receipts stop acknowledgement; they never
+trigger retraining or silently overwrite the conflicting evidence. Reading or
+binding an owned checkpoint separately still works after source workspace loss.
 Reported costs must fit the frozen budget; providers enforce actual process/GPU
 limits and cancellation. Core does not infer spare cluster capacity or provision
 instances. A failed, quiescent training job produces no candidate. Training loss

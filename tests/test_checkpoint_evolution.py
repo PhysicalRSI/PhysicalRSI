@@ -425,3 +425,39 @@ def test_changed_planner_identity_is_rejected_before_training(tmp_path, monkeypa
     assert provider.scheduler.status()['jobs'] == {}
     assert quota.status()['reserved_trials'] == 16
     assert not (path.parent / 'job').exists()
+
+
+@pytest.mark.parametrize('receipt', ['submission.json', 'terminal.json', 'collection.json'])
+@pytest.mark.parametrize('damage', ['changed', 'missing'])
+def test_completed_training_resume_checks_local_receipts(tmp_path, monkeypatch, receipt, damage):
+    _, _, _, _, provider, coordinator, directory, request = pending(tmp_path)
+    provider.scheduler.work_once(provider.handler)
+    revision = coordinator.advance(request, directory)
+    original = coordinator.store.read(revision)
+    path = directory / receipt
+    saved = read_json(path)
+
+    def unexpected(*args):
+        pytest.fail('Completed checkpoint recovery must not invoke the provider')
+
+    for method in ('submit', 'recover_submission', 'poll', 'collect'):
+        monkeypatch.setattr(provider, method, unexpected)
+    assert coordinator.advance(request, directory) == revision
+    if damage == 'missing':
+        path.unlink()
+    else:
+        changed = deepcopy(saved)
+        if receipt == 'submission.json':
+            changed['handle']['job_id'] = 'another-job'
+            changed['handle_sha256'] = digest(changed['handle'])
+        elif receipt == 'terminal.json':
+            changed['state'] = 'failed'
+        else:
+            changed['metrics']['unrecorded_reward'] = 100
+        atomic_json(path, changed)
+    with pytest.raises(ValueError, match='Published training receipt'):
+        coordinator.advance(request, directory)
+    assert coordinator.store.read(revision) == original
+    atomic_json(path, saved)
+    assert coordinator.advance(request, directory) == revision
+    assert len(provider.scheduler.status()['jobs']) == 1
