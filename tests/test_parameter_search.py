@@ -99,14 +99,14 @@ def test_rejected_probe_changes_fit_and_materialization_is_idempotent(tmp_path):
 
 @pytest.mark.parametrize('boundary',['fit','rename'])
 def test_interrupted_scalar_publication_resumes_exact_bytes(tmp_path,monkeypatch,boundary):
-    from PhysicalRSI_core.self_harness import parameter_search as module
+    from PhysicalRSI_core.self_harness import parameter_search as module, search_space
     evolver,args=search(tmp_path)
-    original=module.freeze_json if boundary=='fit' else module.os.rename
+    original=module.freeze_json if boundary=='fit' else search_space.os.rename
     def interrupted(*a,**kw):
         original(*a,**kw)
         raise RuntimeError('after durable publication')
     with monkeypatch.context() as patch:
-        patch.setattr(module if boundary=='fit' else module.os,'freeze_json' if boundary=='fit' else 'rename',interrupted)
+        patch.setattr(module if boundary=='fit' else search_space.os,'freeze_json' if boundary=='fit' else 'rename',interrupted)
         with pytest.raises(RuntimeError,match='durable publication'):
             evolver.propose_from_archive(*args)
     result=evolver.resume_proposal_from_archive(*args)

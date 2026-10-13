@@ -11,13 +11,11 @@ from hashlib import sha256
 from itertools import chain
 import json
 import math
-import os
 from pathlib import Path
-import shutil
-import tempfile
 
 from ..infra.storage import canonical, digest, file_digest, relative_path
-from .artifacts import CLOSURE, HarnessSnapshots, verify_harness
+from .artifacts import CLOSURE, verify_harness
+from .search_space import materialize
 from .evaluation import freeze_json
 
 
@@ -96,7 +94,8 @@ class ScalarRefinementEvolver:
             classifier=self.classifier.identity(), archive=self.archive.identity(),
             assumption='per-case monotone feasibility in the declared direction',
             implementation=file_digest(Path(__file__)),
-            artifacts=file_digest(Path(__file__).with_name('artifacts.py')))
+            artifacts=file_digest(Path(__file__).with_name('artifacts.py')),
+            search_space=file_digest(Path(__file__).with_name('search_space.py')))
 
     def _stable(self):
         if self.identity() != self._identity:
@@ -189,33 +188,7 @@ class ScalarRefinementEvolver:
         components[parameter.component][parameter.file] = sha256(payload).hexdigest()
         name = 'refinement-' + digest(report)[:12]
         destination = output / 'parameter-candidate'
-        candidate = dict(id=name, root=str(destination), components=components)
-        if destination.is_symlink():
-            raise ValueError('Parameter candidate must be an owned physical directory')
-        if not destination.exists():
-            temporary = Path(tempfile.mkdtemp(prefix='.parameter-', dir=output))
-            try:
-                for path in sorted({name for files in components.values() for name in files}):
-                    target = temporary / relative_path(path)
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    if path == parameter.file:
-                        target.write_bytes(payload)
-                    else:
-                        shutil.copy2(Path(parent['root']) / path, target)
-                    with target.open('rb') as stream:
-                        os.fsync(stream.fileno())
-                verify_harness(dict(candidate, root=str(temporary)))
-                verify_harness(parent)
-                for directory in sorted([p for p in temporary.rglob('*') if p.is_dir()], key=lambda p:len(p.parts), reverse=True):
-                    HarnessSnapshots._sync(directory)
-                HarnessSnapshots._sync(temporary)
-                os.rename(temporary, destination)
-                HarnessSnapshots._sync(output)
-            finally:
-                if temporary.exists():
-                    shutil.rmtree(temporary)
-        if verify_harness(candidate) != digest(dict(components=components)):
-            raise ValueError('Existing scalar candidate differs from its frozen fit')
+        candidate = materialize(parent, components, {parameter.file: payload}, output=destination, name=name)
         self._stable()
         evidence[str(output / 'search-fit.json')] = file_digest(output / 'search-fit.json')
         return [dict(candidate, parent_sha256=verify_harness(parent), method='development-scalar-refinement',

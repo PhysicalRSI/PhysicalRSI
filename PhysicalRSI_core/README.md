@@ -173,3 +173,13 @@ and abstains on contradictory observations. Adapters supply the feedback
 classification and monotonicity assumption; fresh paired selection still governs
 inheritance. See [parameter search](../docs/core-development.md#development-feedback-parameter-search)
 for the CPU acceptance and optional Isaac integration.
+
+`self_harness.adaptive_search.AdaptiveParameterEvolver` searches a declared
+`ParameterSpace` of numeric JSON fields. It ranks only complete comparable
+development panels, mixes global exploration with sampling near elite observed
+vectors, and keeps rejected probes available for later rounds. It does not
+assume a monotone response. Environment/verifier identities, execution budget,
+contracts and fixed controller inputs condition usable observations. The
+objective is an explicit adapter; independent paired selection still controls
+inheritance. This is opt-in: the initial three-seed CPU comparison did not beat
+uniform search. See [adaptive parameter search](../docs/core-development.md#adaptive-parameter-search).

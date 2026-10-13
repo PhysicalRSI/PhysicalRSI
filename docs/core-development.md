@@ -997,3 +997,143 @@ report-only final testing. Seed 1000 is an explicit regression case, not held ou
 The default two rounds and three evaluation cases reserve at most 19 trials;
 one child is screened per round before any full paired comparison. This mode
 implies staged evaluation and remains serial on one leased native worker.
+
+### Observed feedback-search acceptance, 2026-10-13
+
+The local study at
+`/cpfs02/user/yanming/physicalrsi-core-checks/native-rollout-search-001`
+executed 12 native Isaac trials from frozen source manifest
+`16edef32a3c516158350dfbba81d3a160220210720521b88d3fa371529e20711`.
+The implementation was pushed in commit `76466b6` after 564 software tests,
+compile checks and both public CLI smoke commands passed. Use the retained
+frozen source to reopen this experiment.
+
+| Stage | Policy | Successful trials |
+| --- | --- | --- |
+| Development, known failure seed 1000 | Initial, 0.13 m transit | 0/1 |
+| Development screening, same seed | Proposed 0.34 m transit | 1/1 |
+| Paired validation, seeds 40000–40002 | Initial | 0/3 |
+| Same validation cases | Proposed candidate | 3/3 |
+| Second-round development, seed 1000 | Inherited candidate | 1/1 |
+| Report-only test, seeds 50000–50002 | Frozen final candidate | 2/3 |
+
+The two decisions were `inherit_child` and `no_changed_candidate`. The first
+native proposal passed screening, so this native run did not exercise reuse of
+a rejected probe. That mechanism was measured separately with two CPU numerical
+tasks: access to rejected development feedback produced iteration budgets
+`5 -> 7`, whereas the current-feedback-only ablation repeated `5 -> 5`.
+The former passed both final CPU cases; the latter failed both. Both arms used
+the same two-round protocol and 30-trial limit, consuming 18 and 10 trials
+respectively because rejected pools skip paired validation. Independent CPU
+restarts created no new trials and preserved all evidence.
+
+The native driver stopped after nine completed trials. Process, device and
+receipt reconciliation verified that both research rounds were complete and
+final testing had not started; recovery ran only the three untouched test cases.
+A subsequent independent restart forbade native worker launch, returned the
+same result, verified 2,237 unchanged files and created zero trials or workers.
+All three queued jobs completed and all local resource/device claims were
+released. `acceptance-audit.json`, `resume-reconciliation.json`,
+`restart-audit.json` and `final-review.json` retain these checks.
+
+Test seed 50001 failed placement and obstacle-disturbance checks. This is
+bounded simulation evidence, not broad generalization or physical qualification.
+The search domain, classifier and monotonicity assumption remain authored.
+The inspected failing test may inform a future development protocol, but it
+must then be excluded from claims of fresh held-out evaluation.
+
+## Adaptive parameter search
+
+`ParameterSpace` declares up to 32 bounded numeric JSON fields across mutable
+harness components. Fields must have existing keys, non-overlapping paths,
+exact component ownership and a declared precision grid. Foundation and weights
+remain fixed. Candidate publication verifies the entire closure, synchronizes
+files and atomically publishes each immutable candidate; an interrupted proposal
+can resume the same frozen fit without duplicate execution.
+
+`AdaptiveParameterEvolver` reads actual current development evaluations and
+`CandidateArchive.development(view)`. An explicit objective adapter returns a
+finite score in `[0, 1]` or `None`. Unknown/invalid outcomes are not scored as
+failures. The current task/case/scope panel defines the comparison set: each
+parameter vector must have definite scores covering that entire panel before
+it can enter the elite set. Replicates are averaged within a case, cases within
+a task, and tasks by predeclared weights. Duplicate receipt observations do not
+increase weight. Incomplete vectors and changed controller conditions are
+recorded separately in the fit.
+
+Observation compatibility checks the experiment specification bound to the
+Trial receipt. Environment and verifier identities, runtime implementation,
+execution budget, embodiment/System 1 contracts and dependencies must match.
+The varying policy adapter's identity and System 1 revision are omitted from
+this context because the parameterized harness closure is checked separately.
+The frozen suite identity and admission remain responsible for attesting that
+policy construction follows that closure. These are trusted adapter boundaries,
+not a sandbox or proof of external-provider equivalence. Different fidelity
+budgets or dynamics cannot silently train one shared sampling distribution.
+
+At each round the algorithm ranks complete observed parameter vectors, estimates
+an elite mean and diagonal spread, and proposes a bounded population. A fixed
+fraction samples the whole domain; the remainder samples near the elite set,
+with a declared minimum spread. Quantization respects the declared field grids.
+Already observed vectors are skipped, and a fixed attempt budget prevents
+unbounded retries on a coarse or exhausted grid. A deterministic random seed,
+ranked observations, exclusions, fitted distribution and proposed vectors are
+stored in `adaptive-fit.json`. `strategy="uniform"` provides a control using the
+same space, case protocol, population and quota. No monotonicity assumption,
+LLM call or model checkpoint update is required.
+
+The CPU study in `PhysicalRSI_demos.adaptive_control` executes a proportional/
+derivative controller under two different load dynamics. Trials integrate motion
+with force saturation, measure trajectory error and overshoot, and screen on
+settling success. Development includes positive/negative moves and two load
+scales. Validation and final tests use separate moves and load scales. Parameter
+scores shape proposals; fresh paired validation decides inheritance. This is a
+bounded software dynamics study, not simulator or robot qualification.
+
+```bash
+python -c 'from PhysicalRSI_demos.adaptive_control import run; print(run("/tmp/physicalrsi-adaptive-control", strategy="adaptive", seed=0)["quota"])'
+python -c 'from PhysicalRSI_demos.adaptive_control import run; print(run("/tmp/physicalrsi-uniform-control", strategy="uniform", seed=0)["quota"])'
+PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider tests/test_adaptive_search.py tests/test_selection_order.py
+```
+
+The multi-task study also exposed order-dependent selection receipts: rejection
+lists differed after canonical JSON reordered task or cost-limit keys. Survivor
+selection now uses a canonical task/measurement order for those lists and task
+aggregation, allowing the same complete paired evidence to survive commit and
+restart verification.
+
+### Observed adaptive-search comparison, 2026-10-13
+
+The preregistered study at
+`/cpfs02/user/yanming/physicalrsi-core-checks/adaptive-parameter-search-001`
+used source manifest
+`ca8ea33d923a35f2531db2fd0a315bc7c968c201ae3ccaba344bc522be4a2f98`.
+All 605 software tests, compile checks and both public CLI smoke commands passed.
+Each strategy used seeds 0, 1 and 2, four rounds, six candidates per round and
+a 228-Trial cap per seed. The first three global exploration vectors matched
+between strategies in every round, and all preregistered case panels matched.
+
+| Seed | Adaptive final quality | Uniform final quality | Adaptive Trials | Uniform Trials |
+| --- | --- | --- | --- | --- |
+| 0 | 0.8297 | 0.8222 | 136 | 156 |
+| 1 | 0.7639 | 0.7870 | 144 | 160 |
+| 2 | 0.8074 | 0.8414 | 176 | 152 |
+| Mean / total | 0.8003 | 0.8169 | 456 | 468 |
+
+Final quality averages the measured quality across both tasks and their two test
+cases; higher is better. Both strategies passed all 12 final cases across the
+three seeds. Actual Trial use differs because screening skips validation for
+rejected pools. These are descriptive results from three seeds, not a significance
+claim or an equal-consumption comparison. Adaptive search did not outperform
+uniform search overall and remains an opt-in research algorithm. The study
+supports its feedback, provenance and recovery behavior, not a performance gain.
+
+An independent audit reconstructed all 924 trajectories from recorded gains,
+actions and dynamics and recomputed every outcome and quality measurement.
+Six independent restarts prohibited environment reset, created zero Trials and
+preserved 16,442 evidence files. All 201 scheduled jobs completed and released
+their resources. `acceptance-audit.json` and `final-review.json` record these
+checks. The source and six byte-verified artifact archives are retained on CPFS;
+reopening archived runs requires restoring their original absolute roots.
+Final tests did not inform proposals. Future algorithm comparisons require a
+new preregistered protocol and untouched final cases.

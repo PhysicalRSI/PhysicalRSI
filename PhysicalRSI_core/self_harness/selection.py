@@ -196,7 +196,10 @@ def select_survivor(
         raise ValueError(
             "Validation must be generated after the entire pool/profile freezes"
         )
-    tasks = comparison["profile"]["tasks"]
+    # JSON object order is not part of the frozen comparison identity. Use one
+    # order for arithmetic and rejection lists before and after persistence.
+    tasks = {name: comparison["profile"]["tasks"][name]
+             for name in sorted(comparison["profile"]["tasks"])}
     layouts = cohort["layouts"]
     if set(layouts) != set(tasks):
         raise ValueError("Cohort task coverage differs")
@@ -327,8 +330,8 @@ def select_survivor(
                 or parent_metrics["success_rate"][t] - metric["success_rate"][t]
                 > spec.get("maximum_success_regression", 1) + profile["tie_tolerance"])]
         over_cost = [t + ":" + key for t, spec in tasks.items()
-                     for key, limit in spec.get("cost_limits", {}).items()
-                     if metric["mean_cost"][t][key] > limit]
+                     for key in sorted(spec.get("cost_limits", {}))
+                     if metric["mean_cost"][t][key] > spec["cost_limits"][key]]
         if statistics:
             differences = [paired_scores[name][pair] - paired_scores[parent][pair] for pair in sorted(expected)]
             metric["improvement_evidence"] = dict(
