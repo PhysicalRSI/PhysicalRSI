@@ -12,6 +12,7 @@ from ..contracts import ReconciliationRequired
 from ..infra.storage import file_digest
 from .artifacts import verify_harness
 from .evaluation import ExperimentEvaluator, freeze_json
+from .experiments import experiment_score
 from .scheduled import ScheduledEvaluator
 
 
@@ -32,7 +33,7 @@ class _ScreeningJobs:
 
 class MultiFidelityEvaluator(ScheduledEvaluator):
     def __init__(self, *, screening, screening_resources, minimum_success_rate,
-                 screen_incumbent=False, **kwargs):
+                 screen_incumbent=False, survivor_limit=None, ranking_profile=None, **kwargs):
         if (not isinstance(screening, ExperimentEvaluator)
                 or type(screen_incumbent) is not bool
                 or isinstance(minimum_success_rate, bool) or not isinstance(minimum_success_rate, (int, float))
@@ -41,6 +42,31 @@ class MultiFidelityEvaluator(ScheduledEvaluator):
         self.screening, self.screening_resources = screening, deepcopy(screening_resources)
         self.minimum_success_rate = minimum_success_rate
         self.screen_incumbent = screen_incumbent
+        if survivor_limit is None:
+            if ranking_profile is not None:
+                raise ValueError("A screening ranking profile requires a survivor limit")
+        else:
+            if type(survivor_limit) is not int or survivor_limit < 1:
+                raise ValueError("Screening survivor limit must be a positive integer")
+            if not isinstance(ranking_profile, dict) or set(ranking_profile) != set(screening.budgets):
+                raise ValueError("Screening ranking profile must cover every screening task")
+            for spec in ranking_profile.values():
+                if not isinstance(spec, dict) or set(spec) != {"weight", "score_range"}:
+                    raise ValueError("Declare each screening task's weight and score range")
+                bounds = spec["score_range"]
+                if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
+                    raise ValueError("Screening score range requires two bounds")
+                values = [spec["weight"], *bounds]
+                if any(type(v) not in (int, float) or not math.isfinite(v) for v in values):
+                    raise ValueError("Screening weights and bounds must be finite numbers")
+                low, high = bounds
+                if spec["weight"] <= 0 or low >= high or not math.isfinite(high - low):
+                    raise ValueError("Screening weights and score ranges must be positive")
+            if not math.isfinite(sum(spec["weight"] for spec in ranking_profile.values())):
+                raise ValueError("Screening total weight must be finite")
+        self.survivor_limit = survivor_limit
+        self.ranking_profile = ({task: dict(weight=spec["weight"], score_range=list(spec["score_range"]))
+                                 for task, spec in ranking_profile.items()} if ranking_profile is not None else None)
         super().__init__(**kwargs)
         if (not screening_resources or any(k not in self.scheduler.capacities or type(v) is not int
                 or not 1 <= v <= self.scheduler.capacities[k] for k, v in screening_resources.items())):
@@ -55,12 +81,30 @@ class MultiFidelityEvaluator(ScheduledEvaluator):
         return dict(super().identity(), fidelity=dict(screening=self.screening.identity(),
             resources=self.screening_resources, minimum_success_rate=self.minimum_success_rate,
             screen_incumbent=self.screen_incumbent,
+            survivor_limit=self.survivor_limit, ranking_profile=self.ranking_profile,
             implementation=file_digest(Path(__file__))))
 
     def policy_identity(self):
         value = super().policy_identity()
         value["fidelity"]["screening"] = self.screening.policy_identity()
         return value
+
+    def _ranking_scores(self, episodes):
+        """Normalize each task before weighting; case counts do not set weights."""
+        per_task = {}
+        for task, spec in self.ranking_profile.items():
+            low, high = spec["score_range"]
+            scores = [experiment_score(dict(outcome=row["outcome"],
+                verdict=dict(measurements=row["measurements"])),
+                score_measurement=self.screening.score_measurement, score_range=(low, high))
+                for row in episodes if row["task"] == task]
+            if not scores:
+                raise ValueError("Screening ranking requires a complete task panel")
+            per_task[task] = math.fsum((score - low) / (high - low) / len(scores) for score in scores)
+        total = sum(spec["weight"] for spec in self.ranking_profile.values())
+        score = math.fsum(per_task[task] * (spec["weight"] / total)
+                         for task, spec in self.ranking_profile.items())
+        return dict(per_task=per_task, score=score)
 
     def screen_pool(self, parent, candidates, output):
         self._stable()
@@ -104,12 +148,26 @@ class MultiFidelityEvaluator(ScheduledEvaluator):
                 freeze_sha256=verify_harness(candidate), measured=True, per_task=per_task,
                 reason="incumbent retained for full comparison" if incumbent else
                        "development screening passed" if passed else "development screening below threshold")
+            if self.survivor_limit is not None:
+                admissions[candidate["id"]]["ranking"] = self._ranking_scores(result["episodes"])
             evidence.update({str((directory / name).relative_to(output)): sha for name, sha in result["evidence"].items()})
+        ranking = None
+        if self.survivor_limit is not None:
+            # The incumbent never competes for a slot. Content identity breaks
+            # exact ties independently of names, input order or completion order.
+            ranking = sorted((name for name, row in admissions.items()
+                              if name != parent["id"] and row["accepted"]),
+                             key=lambda name: (-admissions[name]["ranking"]["score"], hashes[name]))
+            for index, name in enumerate(ranking):
+                admissions[name]["ranking"]["rank"] = index + 1
+                if index >= self.survivor_limit:
+                    admissions[name].update(accepted=False, reason="development screening survivor limit")
         self._stable()
         if {h["id"]: verify_harness(h) for h in candidates} != hashes:
             raise ValueError("Candidate changed during screening")
         return dict(schema="physicalrsi.fidelity-screening/v1", evaluator_revision=low.revision,
                     policy=self.identity()["fidelity"], candidates=admissions, evidence=evidence,
+                    ranking=ranking,
                     role="screening_only", qualification=None)
 
     resume_screening = screen_pool

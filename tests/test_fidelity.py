@@ -146,3 +146,128 @@ def test_incumbent_measurement_policy_is_frozen_before_restart(tmp_path,original
     with pytest.raises(ValueError,match='Frozen'):
         reopened.run(seed)
     assert not suite.resets and quota.status()==before
+
+
+def bounded_screening(monkeypatch, options):
+    initialize = MultiFidelityEvaluator.__init__
+
+    def bounded(self, **kwargs):
+        kwargs.update(options)
+        initialize(self, **kwargs)
+
+    monkeypatch.setattr(MultiFidelityEvaluator, '__init__', bounded)
+
+
+def ranking_profile():
+    return {t: dict(weight=1, score_range=[0, 1]) for t in ('axis', 'vector')}
+
+
+@pytest.mark.parametrize('screen_incumbent', [False, True])
+def test_ranked_survivors_retain_incumbent_and_all_branch_evidence(tmp_path, monkeypatch, screen_incumbent):
+    options = dict(survivor_limit=2, ranking_profile=ranking_profile(), minimum_success_rate=0.)
+    bounded_screening(monkeypatch, options)
+    campaign, initial, suite, quota = setup(tmp_path, screen_incumbent=screen_incumbent, max_trials=48)
+    result = campaign.run(initial)
+    report = campaign.report_test(initial)
+    directory = campaign.root / 'rounds/round-0001/execution'
+    screen = read_json(directory / 'screening.json')['output']
+    rows = screen['candidates']
+    ranked = screen['ranking']
+    assert ranked[0] == 'calibrated-0' and len(ranked) == 4
+    assert ranked[1:] == sorted(ranked[1:], key=lambda name: rows[name]['freeze_sha256'])
+    assert [rows[name]['ranking']['rank'] for name in ranked] == [1, 2, 3, 4]
+    assert rows[ranked[0]]['ranking']['per_task'] == {'axis': 1., 'vector': 1.}
+    assert rows[initial['id']]['accepted'] and rows[initial['id']]['measured'] is screen_incumbent
+    assert {name for name, row in rows.items() if row['accepted']} == {initial['id'], *ranked[:2]}
+    frozen = read_json(directory / 'freeze.json')['output']
+    assert set(frozen['candidates']) == {initial['id'], *ranked[:2]}
+    assert all(not (directory / 'experiments/validation' / name).exists() for name in ranked[2:])
+    assert result['current']['harness']['id'] == 'calibrated-0'
+    assert all(v['success_rate'] == 1 for v in report['metrics'].values())
+    archive = CandidateArchive(tmp_path / 'archive')
+    entries = [archive.read(p.parent.name) for p in (archive.root / 'entries').glob('*/record.json')]
+    first = next(e for e in entries if ranked[-1] in e['candidates'])
+    for name in ranked[2:]:
+        row = first['candidates'][name]
+        assert row['disposition'] == 'admission_rejected' and row['metrics'] is None
+        assert row['screening']['ranking'] == rows[name]['ranking']
+        assert row['screening']['reason'] == 'development screening survivor limit'
+    before = quota.status()
+    reopened, seed, fresh, _ = setup(tmp_path, screen_incumbent=screen_incumbent, max_trials=48)
+    assert reopened.run(seed) == result and reopened.report_test(seed) == report
+    assert not fresh.resets and quota.status() == before
+    options['survivor_limit'] = 1
+    reopened, seed, fresh, _ = setup(tmp_path, screen_incumbent=screen_incumbent, max_trials=48)
+    with pytest.raises(ValueError, match='Frozen'):
+        reopened.run(seed)
+    assert not fresh.resets and quota.status() == before
+
+
+@pytest.mark.parametrize('options', [
+    dict(survivor_limit=0, ranking_profile=ranking_profile()),
+    dict(survivor_limit=True, ranking_profile=ranking_profile()),
+    dict(survivor_limit=1.5, ranking_profile=ranking_profile()),
+    dict(survivor_limit=1),
+    dict(ranking_profile=ranking_profile()),
+    dict(survivor_limit=1, ranking_profile={'axis': dict(weight=1, score_range=[0, 1])}),
+    dict(survivor_limit=1, ranking_profile={t: dict(weight=True, score_range=[0, 1]) for t in ('axis', 'vector')}),
+    dict(survivor_limit=1, ranking_profile={t: dict(weight=0, score_range=[0, 1]) for t in ('axis', 'vector')}),
+    dict(survivor_limit=1, ranking_profile={t: dict(weight=1, score_range=[1, 1]) for t in ('axis', 'vector')}),
+    dict(survivor_limit=1, ranking_profile={t: dict(weight=1, score_range=[-1e308, 1e308]) for t in ('axis', 'vector')}),
+    dict(survivor_limit=1, ranking_profile={t: dict(weight=1e308, score_range=[0, 1]) for t in ('axis', 'vector')}),
+])
+def test_invalid_ranking_policy_is_rejected_before_trials(tmp_path, monkeypatch, options):
+    bounded_screening(monkeypatch, options)
+    campaign, initial, suite, quota = setup(tmp_path)
+    with pytest.raises(ValueError):
+        campaign.run(initial)
+    assert not suite.resets and quota.status()['reserved_trials'] == 0
+
+
+def test_ranking_normalizes_native_scales_and_task_weights_not_episode_counts():
+    from types import SimpleNamespace
+    evaluator = object.__new__(MultiFidelityEvaluator)
+    evaluator.screening = SimpleNamespace(score_measurement='quality')
+    evaluator.ranking_profile = {'axis': dict(weight=3, score_range=[-10, 10]),
+                                 'vector': dict(weight=1, score_range=[0, 100])}
+    def row(task, score):
+        return dict(task=task, outcome='success', measurements=dict(quality=score))
+    value = evaluator._ranking_scores([row('axis', 0), row('axis', 10), row('vector', 20)])
+    assert value['per_task'] == {'axis': .75, 'vector': .2}
+    assert value['score'] == pytest.approx(.6125)
+    assert evaluator._ranking_scores([row('axis', 5), row('vector', 20)]) == value
+    for bad in (None, True, float('inf'), float('nan'), 101):
+        with pytest.raises(ValueError, match='score'):
+            evaluator._ranking_scores([row('axis', 5), row('vector', bad)])
+
+
+@pytest.mark.parametrize('measurement', ['squared_error', 'absent'])
+def test_misleading_or_missing_ranking_measurements_cannot_promote(tmp_path, monkeypatch, measurement):
+    initialize = MultiFidelityEvaluator.__init__
+
+    def ranked(self, **kwargs):
+        low = kwargs['screening']
+        kwargs['screening'] = ExperimentEvaluator(suite=low.suite, budgets=low.budgets, scope=low.scope,
+            system2=low.system2, quota=low.quota, score_measurement=measurement)
+        # Deliberately reward worse squared error in development. Full validation
+        # still requires actual success on independently generated paired cases.
+        kwargs.update(survivor_limit=1, minimum_success_rate=0.,
+            ranking_profile={t: dict(weight=1, score_range=[0, 1000]) for t in ('axis', 'vector')})
+        initialize(self, **kwargs)
+
+    monkeypatch.setattr(MultiFidelityEvaluator, '__init__', ranked)
+    campaign, initial, suite, quota = setup(tmp_path, max_trials=64)
+    directory = campaign.root / 'rounds/round-0001/execution'
+    if measurement == 'absent':
+        with pytest.raises(ValueError, match='score measurement'):
+            campaign.run(initial)
+        assert not (directory / 'validation.json').exists()
+        assert quota.status()['reserved_trials'] == len(suite.resets) == 10
+    else:
+        result = campaign.run(initial)
+        screen = read_json(directory / 'screening.json')['output']
+        assert screen['ranking'][0] == 'overcorrection-4'
+        assert set(read_json(directory / 'freeze.json')['output']['candidates']) == {'uncalibrated', 'overcorrection-4'}
+        assert result['current']['harness']['id'] == initial['id']
+    assert campaign.state.resolve()['harness']['id'] == initial['id']
+    assert JobScheduler(tmp_path / 'scheduler', capacities={'cpu': 2}).status()['used'] == {'cpu': 0}

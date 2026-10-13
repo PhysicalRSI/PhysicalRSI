@@ -131,7 +131,8 @@ class Reflector:
         return dict(schema='physicalrsi.memory-delta/v1',operations=[])
 
 
-def setup(root,*,strategy='adaptive',seed=0,rounds=4,population=6,covariance='diagonal',minimum_observations=1):
+def setup(root,*,strategy='adaptive',seed=0,rounds=4,population=6,covariance='diagonal',minimum_observations=1,
+          survivor_limit=None):
     if type(rounds) is not int or not 1<=rounds<=6:
         raise ValueError('Use one to six rounds in this fixed CPU protocol')
     root=Path(root).resolve()
@@ -164,7 +165,9 @@ def setup(root,*,strategy='adaptive',seed=0,rounds=4,population=6,covariance='di
         common=dict(suite=declared,budgets={t:Budget(100,30) for t in TASKS},scope='software',quota=quota,score_measurement='quality')
         screening=ExperimentEvaluator(**common,system2=Revision('pd-development-screening','1'))
         evaluator=MultiFidelityEvaluator(**common,system2=Revision('pd-validation','1'),screening=screening,
-            scheduler=scheduler,resources={'cpu':1},screening_resources={'cpu':1},workers=2,minimum_success_rate=1.,screen_incumbent=False)
+            scheduler=scheduler,resources={'cpu':1},screening_resources={'cpu':1},workers=2,minimum_success_rate=1.,screen_incumbent=False,
+            survivor_limit=survivor_limit,
+            ranking_profile={t:dict(weight=1,score_range=[0,1]) for t in TASKS} if survivor_limit is not None else None)
         return SelfHarness(directory,state=state,proposer=RolloutProposer(evaluator,evolver,archive=archive),evaluator=evaluator,
             selector=Selector(),evolution=EvolutionSpec(('control',)),archive=archive,max_candidates=population,scope='software',round_context=context,
             profile=dict(tasks={t:dict(weight=1,episodes=2,score_range=[0,1],maximum_regression=0,

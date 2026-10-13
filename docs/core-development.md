@@ -483,6 +483,28 @@ invented or reused for it. Set `screen_incumbent=True` to measure the entire
 pool for diagnostics; this policy is frozen before effects. An uncertain
 screening outcome blocks full dispatch.
 
+An optional `survivor_limit` caps the number of children sent to full validation.
+It requires `ranking_profile={task: {"weight": positive_number,
+"score_range": [low, high]}}` covering every screening task. The screening
+`score_measurement` supplies native scores (or binary success when omitted).
+Each score is normalized within its declared range, averaged within its task,
+and then averaged using the declared task weights. Higher scores rank first;
+exact ties use executable content hashes, independent of candidate names or
+scheduler completion order. Only children that satisfy every success threshold
+compete for slots; the incumbent is always retained outside the cap, including
+when it has no screening measurement.
+
+A bounded screen rejects missing, nonfinite or out-of-range measurements before
+full dispatch. Profiles, limits and measurement mappings are frozen in evaluator
+identity. Screening records retain per-task normalized means, aggregate scores,
+ranks and cutoff reasons; rejected branches keep their rollout evidence in the
+archive and remain available as development feedback. This is a fixed allocation
+policy, not a guarantee that the best validation candidate survives: noisy or
+biased development scores can discard useful children. The default remains
+unlimited. Full validation still runs fresh paired cases and enforces its own
+scores, success and regression constraints. For example, the CPU control demo
+accepts `adaptive_control.setup(path, survivor_limit=2)`.
+
 Only children passing screening enter the frozen full pool, whose independent
 validation cases are then generated. Cheap scores never become promotion
 scores. This implementation supports development screening followed by full
@@ -515,6 +537,42 @@ overcorrections are deliberately included to exercise rejection; this small
 software example does not establish general screening efficiency or native
 simulator performance. Process-exit tests additionally cover retained uncertain
 reservations, complete-evidence recovery and live-owner protection.
+
+### Observed ranked-screening comparison, 2026-10-13
+
+The preregistered `ranked-screening-001` study compared unlimited screening
+with `survivor_limit=2` on seeds 30–39. Both arms used diagonal adaptive search,
+five-observation warmup, four rounds, six proposals per round, the same 228-Trial
+cap, task weights, success thresholds and independent promotion gates. Fresh
+case panels changed effective target displacements and load scales relative to
+the earlier search studies. The two tasks share a force action contract and
+have different load dynamics; they are numerical CPU rollouts, not Isaac runs.
+
+| Screening policy | Mean final quality | Final successes | Total Trials |
+|---|---:|---:|---:|
+| Unlimited | 0.822302 | 40 / 40 | 1,800 |
+| Highest two passing children | 0.822302 | 40 / 40 | 1,620 |
+
+All ten pairs selected identical final gains and obtained identical final
+quality. The bounded policy saved 180 Trials (10%), with per-seed savings of
+4–24 Trials. It passed the preregistered requirements: at least 5% fewer Trials,
+mean quality difference no worse than -0.005, worst paired difference no worse
+than -0.02, and no decrease in final successes. These are descriptive results
+for the declared task distribution, not a statistical guarantee or wall-clock
+speedup claim. The default remains unlimited; no final-test-driven retuning was
+performed, and these now-observed final panels cannot serve as fresh holdouts.
+
+An independent audit reconstructed all 3,420 trajectories and verdicts from
+controller gains and dynamics, recomputed development rankings, and checked
+that full-validation pools contained exactly the incumbent and eligible
+survivors. All screening branches remained available as development feedback.
+Twenty independent restarts created no Trials or actions and left 59,218 files'
+bytes and modes unchanged. All 755 scheduler jobs completed with no retained
+capacity. A separate CPFS interruption after screening completion recovered the
+identical ranking without repeating any screening Trial. The full suite passed
+681 tests. Frozen source, preregistration, raw artifacts, audit results and
+verified byte/mode-preserving archives are retained at
+`/cpfs02/user/yanming/physicalrsi-core-checks/ranked-screening-001`.
 
 ## Compiled skills and versioned memory
 

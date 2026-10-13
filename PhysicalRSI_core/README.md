@@ -118,6 +118,11 @@ By default only children receive screening rollouts. The incumbent is retained
 with `measured: false` and `per_task: null`, then measured on the same full
 validation cases as surviving children. Set `screen_incumbent=True` for an
 additional diagnostic measurement; this choice is frozen in evaluator identity.
+Optional `survivor_limit` and an explicit per-task `ranking_profile` reserve full
+validation for the highest development scores among success-qualified children.
+The incumbent remains outside this limit. Weights and native score ranges are
+frozen before execution; exact ties use executable content hashes. The default
+has no limit, and development ranking supplies no promotion qualification.
 Dead worker reservations persist until verified completion or recorded
 reconciliation; screening scores never count as promotion scores.
 Requests and callback results are owned JSON snapshots. The queue checks handler
@@ -128,6 +133,11 @@ verified evidence. Unknown work retains capacity until verified recovery or
 recorded quiescence; result collection never authorizes reexecution.
 See [evaluation stages](../docs/core-development.md#asynchronous-evaluation-and-fidelity-stages)
 for resource boundaries and the CPU screening comparison.
+A fresh ten-seed CPU comparison of `survivor_limit=2` with unlimited screening
+reduced total Trials from 1,800 to 1,620 (10%), with identical final parameters
+and quality for every pair and 40/40 final successes in each arm. This supports
+an optional allocation policy in that study; it does not establish native
+simulator efficiency or generalize to arbitrary development score noise.
 
 `self_harness.skill_compiler.ExperienceCompiler` turns independently retained
 development trials into checked executable skill bundles. `skills.SkillLibrary`
