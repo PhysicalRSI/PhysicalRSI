@@ -10,6 +10,8 @@ import math
 
 from ..infra.scheduler import JobScheduler
 from ..infra.storage import file_digest, read_json
+from ..infra.trial_recovery import before_execution, inactive
+from ..experiments import ExperimentRuntime
 from .artifacts import verify_harness
 from .evaluation import ExperimentEvaluator
 
@@ -52,6 +54,38 @@ class ScheduledEvaluator(ExperimentEvaluator):
 
     def collect(self, payload):
         return self.read_evaluation(*self._arguments(payload))
+
+    def replacement_plan(self, payload):
+        """Verify explicit Trial replacements without executing any adapters."""
+        candidate, comparison, cohort, output = self._arguments(payload)
+        _, _, directory, plan = self._evaluation_plan(candidate, comparison, cohort, output)
+        with inactive(directory / '.plan.lock'):
+            if read_json(directory / 'plan.json') != plan:
+                raise ValueError('Replacement plan changed')
+            self.quota.verify(self._reservations(directory, plan))
+            runtime = ExperimentRuntime(directory / 'trials', device_registry=self.device_registry)
+            authorizations, pending = [], 0
+            for row in self._execution_rows(directory, plan):
+                folder = runtime.root / row['run_id']
+                if row['replacement'] is not None:
+                    authorizations.append(row['replacement']['authorization_sha256'])
+                if (folder / 'receipt.json').exists():
+                    audited = runtime.read_evidence(row['run_id'])
+                    if audited['specification'].get('replacement') != row['replacement']:
+                        raise ValueError('Completed replacement differs from the frozen plan')
+                else:
+                    runtime.require_unstarted(row['run_id'], replacement=row['replacement'])
+                    pending += 1
+                    if row['replacement'] is not None:
+                        previous = read_json(folder / 'recovery/source/experiment.json')
+                        before_execution(folder, row['run_id'], dict(previous, replacement=row['replacement']), self.device_registry)
+            self._stable()
+            return dict(schema='physicalrsi.scheduled-replacements/v1', authorizations=sorted(authorizations), pending=pending)
+
+    def resume_replacements(self, key, *, operator, reason, evidence):
+        """Release an inactive queue reservation for verified replacement work."""
+        self._stable()
+        return self.scheduler.resume_replacements(key, self, operator=operator, reason=reason, evidence=evidence)
 
     def evaluate_pool(self, candidates, comparison, cohort, output):
         output = self._output(output)

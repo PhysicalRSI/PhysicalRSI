@@ -16,6 +16,7 @@ from ..embodiment import Revision, System2Trial
 from ..experiments import Budget, ExperimentRuntime, trial_adapters, trial_factory_kind
 from ..trials import Evaluation, Trial, task_case_identity
 from ..infra.storage import atomic_json, digest, file_digest, identifier, locked, read_json, relative_path
+from ..infra.trial_recovery import TrialRecovery, inactive
 from . import now
 from .artifacts import verify_harness
 from .experiments import experiment_result, experiment_score
@@ -46,7 +47,7 @@ def freeze_json(path, value):
 class ExperimentEvaluator:
     def __init__(self, *, suite: ExperimentSuite, budgets: dict[str, Budget],
                  scope: str, system2: Revision, quota, device_registry=None,
-                 score_measurement=None):
+                 score_measurement=None, max_replacements=0):
         if (not budgets or any(not isinstance(t, str) or not t for t in budgets)
                 or any(not isinstance(b, Budget) for b in budgets.values())):
             raise ValueError("Declare an experiment budget for each task")
@@ -54,9 +55,12 @@ class ExperimentEvaluator:
             raise ValueError("Declare evaluation scope and System 2 identity")
         if score_measurement is not None and (not isinstance(score_measurement, str) or not score_measurement):
             raise ValueError("A score measurement must be a nonempty name")
+        if type(max_replacements) is not int or not 0 <= max_replacements <= 10:
+            raise ValueError('Declare zero to ten replacements per planned Trial')
         self.suite, self.budgets, self.scope = suite, deepcopy(budgets), scope
         self.system2, self.quota, self.device_registry = system2, quota, device_registry
         self.score_measurement = score_measurement
+        self.max_replacements = max_replacements
         self._identity = deepcopy(self.identity())
         self.revision = digest(self._identity)
 
@@ -68,6 +72,7 @@ class ExperimentEvaluator:
                     scope=self.scope, system2=asdict(self.system2), quota=self.quota.identity(),
                     device_registry=self.device_registry.identity() if self.device_registry else None,
                     score_measurement=self.score_measurement,
+                    max_replacements=self.max_replacements,
                     implementation=dict(experiments.runtime_implementation(), **{
                         name: file_digest(path) for name, path in {
                         "evaluator": Path(__file__),
@@ -156,6 +161,41 @@ class ExperimentEvaluator:
             receipt = self.quota.reserve(self._reservations(directory, plan))
             freeze_json(directory / "quota.json", receipt)
 
+    def _recovery(self, directory, plan):
+        return TrialRecovery(directory, plan, quota=self.quota, device_registry=self.device_registry,
+                             maximum=self.max_replacements)
+
+    def _execution_rows(self, directory, plan):
+        recovery = self._recovery(directory, plan)
+        return [dict(row, logical_run_id=row['run_id'], **{
+            k: v for k, v in recovery.resolve(row['run_id']).items()}) for row in plan['trials']]
+
+    def authorize_replacement(self, candidate, *, output, split, run_id, failed_run_id=None,
+                              operator, reason, evidence, quiescent):
+        """Authorize one new execution without dispatching it or changing its plan.
+
+        The caller independently establishes quiescence. Reset/action-complete
+        Trials cannot be replaced, and the configured allowance defaults to zero.
+        Scheduled evaluations additionally need explicit queue reconciliation.
+        """
+        if split not in {'development', 'validation', 'test'}:
+            raise ValueError('Unknown recovery split')
+        self._stable()
+        output = self._output(output)
+        directory = self._directory(output, split, candidate['id'])
+        with inactive(directory / '.plan.lock'):
+            plan = read_json(directory / 'plan.json')
+            if (plan['evaluator_revision'] != self.revision or plan['candidate_id'] != candidate['id']
+                    or plan['candidate_sha256'] != verify_harness(candidate) or plan['split'] != split
+                    or plan['scope'] != self.scope):
+                raise ValueError('Recovery differs from the frozen candidate/evaluator plan')
+            if read_json(directory / 'quota.json') != self.quota.verify(self._reservations(directory, plan)):
+                raise ValueError('Recovery plan lacks its original quota reservation')
+            replacement_id = self._recovery(directory, plan).authorize(run_id, failed_run_id or run_id,
+                operator=operator, reason=reason, evidence=evidence, quiescent=quiescent)
+            self._stable()
+            return dict(logical_run_id=run_id, failed_run_id=failed_run_id or run_id, run_id=replacement_id)
+
     def _run_plan(self, candidate, directory, plan, *, comparison=None):
         if verify_harness(candidate) != plan["candidate_sha256"]:
             raise ValueError("Candidate differs from the frozen trial plan")
@@ -163,6 +203,7 @@ class ExperimentEvaluator:
         if plan["split"] == "validation" and (comparison is None or digest(comparison) != plan["comparison_sha256"]):
             raise ValueError("Validation scoring requires the frozen comparison")
         runtime = ExperimentRuntime(directory / "trials", device_registry=self.device_registry)
+        execution_rows = self._execution_rows(directory, plan)
         origin = System2Trial(self.system2, candidate["id"], plan["candidate_sha256"],
                               plan["split"], plan["comparison_sha256"], plan["cohort_sha256"])
 
@@ -181,24 +222,30 @@ class ExperimentEvaluator:
                         + str(runtime.root / receipt["id"])) from error
 
         # Discover every unresolved trial before executing any missing one.
-        for row in plan["trials"]:
+        for row in execution_rows:
             folder = runtime.root / row["run_id"]
             if (folder / "receipt.json").exists():
-                receipt = runtime.read(row["run_id"])
-                specification = read_json(folder / "experiment.json")
+                audited = runtime.read_evidence(row["run_id"])
+                receipt, specification = audited['receipt'], audited['specification']
                 expected = dict(task=row["task"], case=row["case"], budget=row["budget"],
-                                scope=self.scope, system2=asdict(origin))
+                                scope=self.scope, system2=asdict(origin), replacement=row['replacement'])
                 if any(specification.get(key) != value for key, value in expected.items()):
                     raise ValueError("Completed trial differs from the frozen plan")
                 require_validation_outcome(receipt, row["task"])
+            else:
+                runtime.require_unstarted(row['run_id'], replacement=row['replacement'])
+                if row['replacement'] is not None:
+                    from ..infra.trial_recovery import before_execution
+                    previous = read_json(folder / 'recovery/source/experiment.json')
+                    before_execution(folder, row['run_id'], dict(previous, replacement=row['replacement']), self.device_registry)
         receipts = []
-        for row in plan["trials"]:
+        for row in execution_rows:
             self._stable()
             if verify_harness(candidate) != plan["candidate_sha256"]:
                 raise ValueError("Candidate changed between trials")
             task = row["task"]
             trial = Trial(row["run_id"], task=task, case=row["case"], scope=self.scope,
-                          budget=self.budgets[task], system2=origin)
+                          budget=self.budgets[task], system2=origin, replacement=row['replacement'])
             adapters = trial_adapters(self.suite, candidate, task)
             self._stable()
             if verify_harness(candidate) != plan["candidate_sha256"]:
@@ -238,16 +285,21 @@ class ExperimentEvaluator:
         if saved != plan or read_json(directory / "quota.json") != self.quota.verify(self._reservations(directory, plan)):
             raise ValueError("Development plan or quota changed")
         runtime = ExperimentRuntime(directory / "trials", device_registry=self.device_registry)
-        values = [Evaluation.read(runtime, row["run_id"]).to_dict() for row in plan["trials"]]
+        execution_rows = self._execution_rows(directory, plan)
+        values = [Evaluation.read(runtime, row["run_id"]).to_dict() for row in execution_rows]
+        if any(value['trial'].get('replacement') != row['replacement']
+               for row, value in zip(execution_rows, values)):
+            raise ValueError('Development replacement differs from the frozen plan')
         rows = [dict(task=row["task"], case=row["case"], run_id=row["run_id"],
                      outcome=value["outcome"], measurements=value["verdict"]["measurements"])
-                for row, value in zip(plan["trials"], values)]
+                for row, value in zip(execution_rows, values)]
         evidence = {str(p.relative_to(output)): file_digest(p) for p in directory.rglob("*.json")}
         for value in values:
             for name, sha in value["evidence"].items():
                 evidence[str(Path(name).relative_to(output))] = sha
         result = dict(split="evolve", evaluator_revision=self.revision, episodes=rows,
-                      evaluations=values, evidence=evidence, costs=dict(reserved_trials=len(rows)))
+                      evaluations=values, evidence=evidence,
+                      costs=dict(reserved_trials=len(rows) + sum(row['attempts'] for row in execution_rows)))
         from .rollout import development_evaluations
         development_evaluations(parent, result, output)
         return result
@@ -343,13 +395,18 @@ class ExperimentEvaluator:
         if read_json(directory / "quota.json") != receipt:
             raise ValueError("Evaluation quota receipt changed")
         runtime = ExperimentRuntime(directory / "trials", device_registry=self.device_registry)
+        execution_rows = self._execution_rows(directory, plan)
         result = experiment_result(
-            runtime, [row["run_id"] for row in plan["trials"]], candidate_id=candidate["id"],
+            runtime, [row["run_id"] for row in execution_rows], candidate_id=candidate["id"],
             comparison=comparison, cohort=cohort, evaluator_revision=self.revision,
-            evidence_root=output, score_measurement=self.score_measurement)
+            evidence_root=output, score_measurement=self.score_measurement,
+            replacements={row['run_id']: row['replacement'] for row in execution_rows})
         for row in result["episodes"]:
             row["evidence_sha256"].update({str(p.relative_to(output)): file_digest(p)
                 for p in (directory / "plan.json", directory / "quota.json")})
+            if (directory / 'replacements.json').exists():
+                path = directory / 'replacements.json'
+                row['evidence_sha256'][str(path.relative_to(output))] = file_digest(path)
         self._stable()
         return result
 
@@ -377,7 +434,7 @@ class ExperimentEvaluator:
             freeze_json(directory / "plan.json", plan)
             self._reserve([(directory, plan)])
             _, receipts = self._run_plan(candidate, directory, plan)
-            rows = [dict(task=row["task"], run_id=row["run_id"], case_sha256=digest(row["case"]),
+            rows = [dict(task=row["task"], run_id=receipt['id'], case_sha256=digest(row["case"]),
                          outcome=receipt["outcome"], measurements=receipt["verdict"]["measurements"])
                     for row, receipt in zip(plan["trials"], receipts)]
             metrics = {}

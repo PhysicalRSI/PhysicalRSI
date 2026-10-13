@@ -53,6 +53,9 @@ class JobScheduler:
                 raise ValueError("Scheduler job identity or state changed")
             if job["state"] == "completed" and digest(job["result"]) != job["result_sha256"]:
                 raise ValueError("Scheduled result changed")
+            for row in job.get('resumes', []):
+                if row.get('revision') != digest({k: v for k, v in row.items() if k != 'revision'}):
+                    raise ValueError('Scheduled replacement history changed')
         return value
 
     def _save(self, ledger):
@@ -228,6 +231,53 @@ class JobScheduler:
                     raise ValueError("Only uncertain jobs may be abandoned")
                 job.update(state="abandoned", reconciliation=dict(operator=operator, reason=reason, evidence=evidence))
                 self._save(ledger)
+            finally:
+                owner.close()
+
+    def resume_replacements(self, key, handler, *, operator, reason, evidence):
+        """Queue explicitly authorized new Trial identities, never replay unknown work.
+
+        Only handlers exposing a read-only replacement_plan() can participate.
+        The old dispatch error and its stopping evidence remain in the job's
+        resume history. Completed and abandoned jobs cannot be reexecuted.
+        """
+        if (not isinstance(operator, str) or not operator.strip() or not isinstance(reason, str)
+                or not reason.strip() or not isinstance(evidence, dict) or not evidence
+                or not callable(getattr(handler, 'replacement_plan', None))):
+            raise ValueError('Replacement resume requires a verifier, operator, reason and evidence')
+        for path, sha in evidence.items():
+            if file_digest(Path(path)) != sha:
+                raise ValueError('Replacement resume evidence changed')
+        with locked(self.root / '.lock'):
+            ledger = self._read()
+            job = ledger['jobs'][key]
+            self._handler(job['request'], handler)
+            owner = self._owner(key)
+            if owner is None:
+                raise JobBusy('Cannot resume a live job owner')
+            try:
+                history = job.get('resumes', [])
+                if job['state'] in {'queued', 'completed'} and history:
+                    previous = history[-1]
+                    if all(previous[k] == v for k, v in dict(operator=operator, reason=reason, evidence=evidence).items()):
+                        return deepcopy(previous)
+                if job['state'] != 'needs_reconciliation':
+                    raise ValueError('Only an interrupted dispatch may resume replacements')
+                proof = self._invoke(job['request'], handler, 'replacement_plan')
+                if (proof.get('schema') != 'physicalrsi.scheduled-replacements/v1'
+                        or not isinstance(proof.get('authorizations'), list)
+                        or not proof['authorizations'] or not proof.get('pending')):
+                    raise ReconciliationRequired('No authorized replacement work; collect completed evidence instead')
+                used = {sha for row in history for sha in row['proof']['authorizations']}
+                if not set(proof['authorizations']) - used:
+                    raise ReconciliationRequired('No new replacement authorization since the previous dispatch')
+                row = dict(previous_state=job['state'], error=job.get('error'), operator=operator,
+                           reason=reason, evidence=_json(evidence), proof=proof)
+                job['resumes'] = [*history, dict(row, revision=digest(row))]
+                job.update(state='queued')
+                job.pop('error', None)
+                self._save(ledger)
+                return deepcopy(job['resumes'][-1])
             finally:
                 owner.close()
 

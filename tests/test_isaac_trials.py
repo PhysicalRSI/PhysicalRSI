@@ -155,6 +155,58 @@ class RefinementContractWorker(ContractWorker):
     disturb_on_failure = True
 
 
+def test_native_contract_recovers_declared_startup_replacement_through_research_entry(tmp_path, monkeypatch):
+    class InterruptedWorker(ContractWorker):
+        failed = False
+        resets = []
+
+        def reset(self, case, context):
+            if case['seed'] == 20000 and not type(self).failed:
+                type(self).failed = True
+                self.resets.append(dict(case=case, candidate=context.harness_revision))
+                raise RuntimeError('contract worker stopped before readiness')
+            return super().reset(case, context)
+
+    monkeypatch.setattr(trials, 'NativeWorker', InterruptedWorker)
+    options = dict(episodes=1, rounds=1, staged=True, max_replacements=1, extra_trials=1)
+    campaign, initial, quota = research.setup(tmp_path, sys.executable, **options)
+    with pytest.raises(RuntimeError, match='before readiness'):
+        campaign.run(initial)
+    directory = campaign.root / 'rounds/round-0001'
+    loop = campaign.build_loop(directory / 'execution', read_json(directory / 'context.json'))
+    receipt = next(p for p in loop.root.glob('experiments/validation/**/trials/*/receipt.json')
+                   if read_json(p)['state'] == 'needs_reconciliation')
+    saved = file_digest(receipt)
+    lease = read_json(receipt.parent / 'lease.json')
+    registry = DeviceRegistry(tmp_path / 'devices')
+    proof = tmp_path / 'stopped.json'
+    atomic_json(proof, dict(quiescent=True, trial=receipt.parent.name, scope='contract worker; no simulator launched'))
+    evidence = {str(proof): file_digest(proof)}
+    registry.reconcile(lease['token'], operator='contract-test', reason='Synchronous worker stopped', evidence=evidence)
+    loop.evaluator.authorize_replacement(initial, output=loop.root, split='validation', run_id=receipt.parent.name,
+        operator='contract-test', reason='Synchronous worker stopped', evidence=evidence, quiescent=True)
+    key = next(k for k, row in loop.evaluator.scheduler.status()['jobs'].items() if row['state'] == 'needs_reconciliation')
+    loop.evaluator.resume_replacements(key, operator='contract-test', reason='Replacement authorized', evidence=evidence)
+    result = research.run(tmp_path, sys.executable, **options)
+    assert result['state'] == 'completed'
+    assert result['final_test']['metrics'][TASK]['success_rate'] == 1
+    assert result['quota']['max_trials'] == 10
+    assert result['quota']['reserved_trials'] == len(InterruptedWorker.resets) == 8
+    assert registry.occupied() == {} and result['scheduling']['used'] == {'native_worker': 0}
+    assert file_digest(receipt) == saved
+    assert research.run(tmp_path, sys.executable, **options) == result
+    assert len(InterruptedWorker.resets) == 8
+
+
+@pytest.mark.parametrize('options', [dict(max_replacements=True), dict(max_replacements=-1),
+    dict(max_replacements=11), dict(extra_trials=True), dict(extra_trials=-1), dict(extra_trials=1.5)])
+def test_native_recovery_budget_rejected_before_workspace_creation(tmp_path, options):
+    root = tmp_path / 'unused'
+    with pytest.raises(ValueError, match='Trial'):
+        research.setup(root, sys.executable, **options)
+    assert not root.exists()
+
+
 def test_native_feedback_contract_reuses_rejected_probe(tmp_path, monkeypatch):
     monkeypatch.setattr(trials, 'NativeWorker', RefinementContractWorker)
     RefinementContractWorker.resets=[]

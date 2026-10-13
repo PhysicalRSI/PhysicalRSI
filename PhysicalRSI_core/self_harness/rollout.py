@@ -74,7 +74,7 @@ def read_development_evaluations(parent, feedback, output):
     if rows != feedback["episodes"]:
         raise ValueError("Development episodes differ from the actual rollouts")
     trials = [{key: value["trial"][key] for key in ("task", "case", "budget")}
-              | {"run_id": value["trial"]["id"]} for value in values]
+              | {"run_id": value.get('recovery', {}).get('original_id', value["trial"]["id"])} for value in values]
     if trials != plan["trials"] or any(value["trial"]["scope"] != plan["scope"] for value in values):
         raise ValueError("Development rollouts do not cover the frozen plan")
     # Every Trial file above was read and verified by Evaluation. Auxiliary

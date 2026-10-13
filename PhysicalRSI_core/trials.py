@@ -28,7 +28,7 @@ def task_case_identity(task, case):
 class Trial:
     _document: str
 
-    def __init__(self, run_id, *, task, case, scope, budget=None, system2=None):
+    def __init__(self, run_id, *, task, case, scope, budget=None, system2=None, replacement=None):
         identifier(run_id)
         if any(not isinstance(value, str) or not value.strip() for value in (task, scope)):
             raise ValueError("Trial requires task and scope")
@@ -37,9 +37,12 @@ class Trial:
         budget = budget if budget is not None else Budget()
         if not isinstance(budget, Budget) or (system2 is not None and not isinstance(system2, System2Trial)):
             raise ValueError("Invalid trial budget or System 2 attribution")
-        object.__setattr__(self, "_document", canonical(dict(schema="physicalrsi.trial/v1",
+        value = dict(schema="physicalrsi.trial/v1",
             id=run_id, task=task, case=case, scope=scope, budget=asdict(budget),
-            system2=asdict(system2) if system2 is not None else None)).decode())
+            system2=asdict(system2) if system2 is not None else None)
+        if replacement is not None:
+            value['replacement'] = replacement
+        object.__setattr__(self, "_document", canonical(value).decode())
 
     def to_dict(self):
         return json.loads(self._document)
@@ -73,13 +76,15 @@ class Evaluation:
             origin = dict(origin, system2=Revision(**origin["system2"]))
             origin = System2Trial(**origin)
         trial = Trial(run_id, task=spec["task"], case=spec["case"], scope=spec["scope"],
-                      budget=Budget(**spec["budget"]), system2=origin)
+                      budget=Budget(**spec["budget"]), system2=origin, replacement=spec.get('replacement'))
         documents, evidence = audited["documents"], audited["evidence"]
         value = dict(schema="physicalrsi.evaluation/v1", trial=trial.to_dict(),
                      trial_sha256=trial.revision, outcome=receipt["outcome"],
                      qualification=receipt["qualification"], reset=documents["reset.json"],
                      trajectory=documents["trajectory.json"], verdict=documents["verdict.json"],
                      receipt=receipt, evidence=evidence)
+        if 'recovery' in audited:
+            value['recovery'] = audited['recovery']
         result = object.__new__(cls)
         object.__setattr__(result, "_document", canonical(value).decode())
         return result

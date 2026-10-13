@@ -41,8 +41,10 @@ These are design references, not dependencies or claims of reproduced results:
   is not an evolutionary candidate archive.
 - [OpenEvolve](https://github.com/algorithmicsuperintelligence/openevolve) and
   [RLinf](https://github.com/RLinf/RLinf) inform the separate search and execution
-  scheduling layers. PhysicalRSI's trial-count quota does not yet schedule GPUs,
-  tokens, model servers or asynchronous simulation workers.
+  scheduling layers. PhysicalRSI separates its Trial-count quota from a durable
+  local JobScheduler and DeviceRegistry that reserve declared resources and
+  coordinate native workers. GPU memory allocation, token budgets, model-server
+  capacity and distributed scheduling remain outside this implementation.
 - [Evo-Harness](https://arxiv.org/abs/2608.15071) studies compilation of execution
   context into reusable skills. [Hermes](https://github.com/NousResearch/hermes-agent)
   is a reference for persistent agent memory and skills. P1 needs executable,
@@ -272,6 +274,85 @@ without colliding. Within-task duplicates and semantic reset reuse remain
 rejected. The result bridge still reads legacy unqualified `case/v1` cohorts.
 Task names must represent actual task domains; renaming one task does not make
 its examples statistically independent or justify reusing its validation data.
+
+### Explicit replacement after an interrupted reset
+
+An SDK startup failure can stop a paired comparison before a task outcome
+exists. `ExperimentEvaluator(max_replacements=N)` declares an optional bound
+of zero to ten replacement attempts per planned Trial; the default is zero.
+The allowance is part of evaluator identity and must be frozen before the
+campaign starts. `TrialQuota` must also have capacity for the additional attempts.
+An authorization consumes a reservation even if execution never starts; neither
+the original failed attempt nor a prepared replacement is automatically refunded.
+
+The runtime records `execution_phase` before entering reset and after saving its
+result. Replacement requires an interrupted reset, no returned reset record or
+dispatched action, inactive local ownership, and an explicit operator attestation
+with hashed stopping evidence. If the Trial leased a device, its original lease
+must first be reconciled through the shared `DeviceRegistry`. A missing receipt
+with other retained execution files also blocks execution. File absence, elapsed
+time and a dead process alone never authorize a replacement.
+
+```python
+# Construct the evaluator with max_replacements=1 and sufficient TrialQuota.
+# Independently stop owned workers and reconcile any device lease first.
+replacement = evaluator.authorize_replacement(
+    candidate, output=round_root, split="validation", run_id=logical_trial_id,
+    failed_run_id=failed_execution_id, operator=operator_name,
+    reason="Owned startup process stopped; reset did not become ready",
+    evidence=stopping_evidence_paths_and_hashes, quiescent=True,
+)
+
+# For ScheduledEvaluator, explicitly release the failed queue reservation for
+# its already authorized replacement work. This verifies the whole Trial plan.
+evaluator.resume_replacements(
+    failed_job_id, operator=operator_name, reason="Replacement Trial authorized",
+    evidence=stopping_evidence_paths_and_hashes,
+)
+result = campaign.run(initial)
+```
+
+Authorization does not execute adapters. It assigns a distinct Trial ID, retains
+the original failed directory, and owns copies of the failed specification,
+receipt, other retained files, stopping evidence and device reconciliation. The
+new `Trial` carries the authorization hash. `Evaluation.read()` verifies this
+owned closure, so a completed replacement remains auditable after its original
+failure source is lost. Candidate, task, case, execution budget, adapters,
+scoring, contracts and System 2 attribution must match the predecessor.
+
+The plan continues to identify its original logical Trial. Development feedback
+and paired results expose the actual replacement execution and bind its logical
+identity to that plan. Only completed replacement measurements reach proposal,
+selection or archival scoring; failed startup records remain recovery evidence.
+The candidate archive retains that closure. Final tests stay report-only and
+retain their original case denominator. Additional attempts consume quota and
+appear in development cost accounting.
+
+The queue preserves each interrupted dispatch's error, operator decision and
+replacement proof. Repeated identical authorization or queue-resume calls are
+idempotent. Another interrupted startup needs a new explicit authorization and
+reservation. Completed or abandoned jobs cannot be reexecuted through this API.
+Read-only collection and ordinary restart never authorize a replacement.
+
+This is a cooperating-process recovery contract. Operators and providers remain
+responsible for independently establishing that effects have stopped. It does
+not automatically diagnose SDK crashes, stop devices, repair corrupt evidence,
+or reconcile actions already dispatched. Completed success, failure, invalid and
+uncertain outcomes cannot be replaced to improve a score. Historical interrupted
+receipts without the new phase evidence remain unresolved. Updating core requires
+a new frozen campaign; an old interrupted study is not silently migrated.
+
+Cross-task software tests inject startup faults into development and validation
+for both scalar and structured-action tasks. They exercise the complete research
+campaign, candidate archive, held-out report, extra reservation and restart, plus
+live ownership, device reconciliation, repeated interruption, quota exhaustion,
+interrupted authorization publication and evidence corruption. These are software
+recovery checks; native simulator recovery needs its own frozen acceptance.
+
+`auto_engineering.research.setup()` exposes the same `max_replacements` option
+and `extra_trials` for explicit additional total Trial capacity. Both default
+to zero; full evaluation and staged screening share the declared allowance and
+quota. These options do not retry automatically or provision simulator workers.
 
 ## Rollout-driven proposals
 

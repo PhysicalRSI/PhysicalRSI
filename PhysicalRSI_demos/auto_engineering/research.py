@@ -109,13 +109,17 @@ class Reflector:
 
 
 def setup(workspace, python, *, episodes=3, rounds=2, gui=False, device_registry=None,
-          resource="isaac-gpu-0", evolver=None, staged=False, screen_incumbent=False, feedback_search=False):
+          resource="isaac-gpu-0", evolver=None, staged=False, screen_incumbent=False, feedback_search=False,
+          max_replacements=0, extra_trials=0):
     if type(episodes) is not int or not 1 <= episodes <= 50 or type(rounds) is not int or not 1 <= rounds <= 20:
         raise ValueError("Use 1 to 50 validation cases and 1 to 20 rounds")
     if type(feedback_search) is not bool or (feedback_search and evolver is not None):
         raise ValueError("Feedback search declares its own bounded evolver")
     if type(staged) is not bool or type(screen_incumbent) is not bool:
         raise ValueError("Screening options must be boolean")
+    if (type(max_replacements) is not int or not 0 <= max_replacements <= 10
+            or type(extra_trials) is not int or extra_trials < 0):
+        raise ValueError('Declare zero to ten replacements per Trial and nonnegative additional Trial capacity')
     staged = staged or feedback_search
     if screen_incumbent and not staged:
         raise ValueError("Declare staged screening before requesting incumbent screening")
@@ -130,7 +134,7 @@ def setup(workspace, python, *, episodes=3, rounds=2, gui=False, device_registry
         evidence={str(seed / "source" / "task.py"): file_digest(seed / "source" / "task.py")})})
     max_candidates = 3 if staged and not feedback_search else 1
     screening_trials = max_candidates + int(screen_incumbent) if staged else 0
-    quota = TrialQuota(root / "quota", max_trials=rounds * (1 + screening_trials + (1+max_candidates)*episodes) + episodes)
+    quota = TrialQuota(root / "quota", max_trials=rounds * (1 + screening_trials + (1+max_candidates)*episodes) + episodes + extra_trials)
     registry = DeviceRegistry(device_registry or root / "devices")
     if feedback_search:
         evolver = ScalarRefinementEvolver(archive=archive, classifier=ClearanceFeedback(),
@@ -156,13 +160,15 @@ def setup(workspace, python, *, episodes=3, rounds=2, gui=False, device_registry
             screening_suite = PreregisteredSuite(Suite(python, suite.root / "screening",
                 resource=resource, gui=gui), protocol)
             screening = ExperimentEvaluator(suite=screening_suite, budgets={TASK:Budget(1,1200)}, scope=SCOPE,
-                system2=Revision("isaac-development-screening","1"),quota=quota,device_registry=registry)
+                system2=Revision("isaac-development-screening","1"),quota=quota,device_registry=registry,
+                max_replacements=max_replacements)
             stages = dict(screening=screening,screening_resources={"native_worker":1},minimum_success_rate=1.,
                 screen_incumbent=screen_incumbent,
                 scheduler=scheduler,resources={"native_worker":1},workers=1,wait_seconds=7200)
         evaluator = evaluator_class(suite=declared,
             budgets={TASK: Budget(1, 1200)}, scope=SCOPE,
-            system2=Revision("isaac-rollout-research", "1"), quota=quota, device_registry=registry, **stages)
+            system2=Revision("isaac-rollout-research", "1"), quota=quota, device_registry=registry,
+            max_replacements=max_replacements, **stages)
         return SelfHarness(directory, state=state, proposer=RolloutProposer(evaluator, evolver, archive=archive),
             evaluator=evaluator, selector=Selector(), evolution=EvolutionSpec(("memory_rules",)),
             archive=archive, max_candidates=max_candidates, scope=SCOPE, round_context=context,

@@ -5,6 +5,7 @@ protocol. This bridge verifies candidate/comparison attribution and raw receipts
 before exposing scores to the existing Self-Harness selector.
 """
 
+from copy import deepcopy
 import math
 from pathlib import Path
 
@@ -28,7 +29,7 @@ def experiment_score(receipt, *, score_measurement, score_range):
 
 
 def experiment_result(runtime, run_ids, *, candidate_id, comparison, cohort,
-                      evaluator_revision, evidence_root, score_measurement=None):
+                      evaluator_revision, evidence_root, score_measurement=None, replacements=None):
     """Build a selection result from exact paired cases and definite outcomes.
 
     Cases must hash to the cohort's layout identities. By default the native
@@ -49,6 +50,10 @@ def experiment_result(runtime, run_ids, *, candidate_id, comparison, cohort,
     run_ids = tuple(run_ids)
     if not run_ids or len(set(run_ids)) != len(run_ids):
         raise ValueError("Experiment IDs must be nonempty and unique")
+    if replacements is not None:
+        replacements = deepcopy(replacements)
+        if set(replacements) != set(run_ids):
+            raise ValueError('Replacement references must cover exactly the planned experiments')
     root = Path(evidence_root).resolve()
     tasks = comparison["profile"]["tasks"]
     layouts = cohort["layouts"]
@@ -64,6 +69,8 @@ def experiment_result(runtime, run_ids, *, candidate_id, comparison, cohort,
     for run_id in run_ids:
         evaluation = Evaluation.read(runtime, run_id)
         value = evaluation.to_dict()
+        if replacements is not None and value['trial'].get('replacement') != replacements[run_id]:
+            raise ValueError('Evaluation replacement differs from the frozen plan')
         receipt = value["receipt"]
         folder = runtime.root / run_id
         specification = read_json(folder / "experiment.json")

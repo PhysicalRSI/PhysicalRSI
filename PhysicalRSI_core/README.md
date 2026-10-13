@@ -53,6 +53,16 @@ An experiment directory contains `experiment.json`, `reset.json`, `trajectory.js
 
 New receipts use `physicalrsi.experiment-receipt/v2`; historical v1 receipts remain readable. `embodiment.py` binds declared environment and System 1 observation/action contracts, frozen dependencies and optional System 2 trial attribution. Changing runtime or adapter identity requires a new trial ID. Policies receive the executing revision through `Context.harness_revision` and can implement explicit episode initialization and teardown.
 
+An evaluator can opt into `max_replacements` before a campaign starts. After
+an interrupted reset, `authorize_replacement` requires a stopped owner, declared
+stopping evidence and any device-lease reconciliation. It reserves an additional
+Trial and preserves the failed attempt under a new execution identity. Scheduled
+work additionally requires `resume_replacements`; neither call launches a worker.
+Completed outcomes and actions already dispatched cannot use this path. Missing
+receipts with retained execution evidence also block execution. See
+[explicit replacement](../docs/core-development.md#explicit-replacement-after-an-interrupted-reset)
+for the API, owned evidence, budget accounting and current recovery boundary.
+
 Deadlines are cooperative. Adapters must bound device calls and honor `Context.check()`. Physical declarations require named resources and an explicitly shared `infra.devices.DeviceRegistry`. Its leases coordinate cooperating processes on one local controller host, retain uncertain ownership across interruption, and require confirmed quiescence before release. They do not stop hardware or fence another controller host. The runtime verifies local evidence and identity consistency; it cannot guarantee sensor accuracy, verifier accuracy, physical reproducibility or process isolation.
 
 ## Self-Harness

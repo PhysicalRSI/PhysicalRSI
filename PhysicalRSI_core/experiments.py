@@ -136,6 +136,7 @@ def runtime_implementation():
         "trial_artifacts": "infra/trial_artifacts.py", "evidence": "infra/evidence.py",
         "embodiment": "embodiment.py", "timing": "timing.py",
         "devices": "infra/devices.py", "storage": "infra/storage.py",
+        "trial_recovery": "infra/trial_recovery.py", "trial_quota": "infra/trial_quota.py",
     }.items()}
 
 
@@ -163,6 +164,14 @@ class ExperimentRuntime:
     def __init__(self, root, *, device_registry=None):
         self.root = Path(root).resolve()
         self.device_registry = device_registry
+
+    def require_unstarted(self, run_id, *, replacement=None):
+        """A missing receipt is not proof that an earlier execution never began."""
+        folder = self.root / identifier(run_id)
+        if (folder / 'recovery').exists() and replacement is None:
+            raise ReconciliationRequired('Prepared replacement requires its authorization reference: ' + str(folder))
+        if folder.exists() and any(p.name not in {'.lock', 'recovery'} for p in folder.iterdir()):
+            raise ReconciliationRequired('Unpublished experiment evidence requires reconciliation: ' + str(folder))
 
     def run_trial(self, trial, *, environment, policy, verifier):
         """Execute the shared Trial contract; legacy run() uses the same path."""
@@ -217,6 +226,11 @@ class ExperimentRuntime:
             required.add("policy-evidence.json")
         elif specification.get("policy_evidence_contract") is not None:
             raise ValueError("Unknown policy evidence contract")
+        recovery = None
+        if 'replacement' in specification:
+            from .infra.trial_recovery import audit_bundle
+            recovery, recovery_files = audit_bundle(reader, run_id, specification)
+            required.update(recovery_files)
         if set(receipt["evidence"]) != required:
             raise ValueError("Experiment evidence manifest is incomplete or unexpected")
         if specification.get("artifact_contract") == "files/v1" and any(
@@ -262,12 +276,15 @@ class ExperimentRuntime:
         if "policy.json" in required and reader.document("policy.json").get("stopped") is not True:
             raise ValueError("Policy termination lacks confirmed cleanup evidence")
         reader.unchanged_document("receipt.json")
-        return dict(receipt=receipt, specification=specification,
+        result = dict(receipt=receipt, specification=specification,
                     documents={name:reader.document(name) for name in ("reset.json", "trajectory.json", "verdict.json")},
                     evidence={str(reader.path(name)):sha for name,sha in reader.hashes.items()})
+        if recovery is not None:
+            result['recovery'] = recovery
+        return result
 
     def run(self, run_id, *, task, case, scope, environment, policy, verifier,
-            budget=None, system2: System2Trial | None = None):
+            budget=None, system2: System2Trial | None = None, replacement=None):
         budget = budget or Budget()
         folder = self.root / identifier(run_id)
         if not scope or not task:
@@ -304,6 +321,8 @@ class ExperimentRuntime:
             device_registry=self.device_registry.identity() if resources else None))
         if policy_evidence is not None:
             specification["policy_evidence_contract"] = "json/v1"
+        if replacement is not None:
+            specification['replacement'] = _json(replacement)
 
         def stable():
             current = _binding(environment, policy)
@@ -320,6 +339,10 @@ class ExperimentRuntime:
                 if read_json(folder / "receipt.json")["experiment_sha256"] != frozen:
                     raise ValueError("Run ID belongs to a different experiment")
                 return self.read(run_id)
+            self.require_unstarted(run_id, replacement=replacement)
+            if replacement is not None:
+                from .infra.trial_recovery import before_execution
+                before_execution(folder, run_id, specification, self.device_registry)
             lease = (self.device_registry.lease(resources, owner=str(folder))
                      if resources else nullcontext(None))
             # Admission/occupancy failures occur before any trial or reset starts.
@@ -332,13 +355,17 @@ class ExperimentRuntime:
         folder = self.root / run_id
         atomic_json(folder / "experiment.json", specification)
         evidence_names = {"experiment.json", "reset.json", "trajectory.json", "verdict.json"}
+        if 'replacement' in specification:
+            from .infra.trial_recovery import audit_bundle
+            _, recovery_files = audit_bundle(evidence.EvidenceReader(folder), run_id, specification)
+            evidence_names.update(recovery_files)
         if claim:
             atomic_json(folder / "lease.json", claim)
             evidence_names.update({"lease.json", "quiescence.json"})
         receipt = dict(schema="physicalrsi.experiment-receipt/v2", id=run_id,
                        state="started", experiment_sha256=frozen, scope=specification["scope"],
                        qualification=None, binding=specification["binding"],
-                       system2=specification["system2"])
+                       system2=specification["system2"], execution_phase='admitted')
         atomic_json(folder / "receipt.json", receipt)
         start = monotonic()
         context = Context(run_id, deadline=start + budget.seconds,
@@ -375,8 +402,12 @@ class ExperimentRuntime:
         try:
             stable()
             context.check()
+            receipt['execution_phase'] = 'reset'
+            atomic_json(folder / 'receipt.json', receipt)
             initial = _json(environment.reset(deepcopy(case), context))
             atomic_json(folder / "reset.json", initial)
+            receipt['execution_phase'] = 'episode'
+            atomic_json(folder / 'receipt.json', receipt)
             context.check()
             if type(initial.get("ready")) is not bool:
                 raise ValueError("Reset must declare readiness")
@@ -448,6 +479,7 @@ class ExperimentRuntime:
             atomic_json(folder / "trajectory.json", trace)
             atomic_json(folder / "verdict.json", verdict)
             receipt.update(state="completed", outcome=verdict["outcome"], verdict=verdict,
+                           execution_phase='completed',
                            steps=max(0, len(trace) - 1), elapsed_seconds=monotonic() - start,
                            termination=termination,
                            evidence={name: file_digest(folder / name) for name in sorted(evidence_names)})

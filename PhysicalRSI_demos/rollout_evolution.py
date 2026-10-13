@@ -155,7 +155,7 @@ class Reflector:
 
 
 def setup(root, *, gains=None, evolver_factory=None, max_candidates=1, task_weights=None, max_trials=14,
-          scheduled_workers=None, screening_threshold=None, screen_incumbent=False):
+          scheduled_workers=None, screening_threshold=None, screen_incumbent=False, max_replacements=0):
     root = Path(root).resolve()
     gains = dict(gains or {"axis": 2.0, "vector": 0.5})
     seed = root / "seed"
@@ -197,12 +197,13 @@ def setup(root, *, gains=None, evolver_factory=None, max_candidates=1, task_weig
         if screening_threshold is not None:
             stages = dict(screening=ExperimentEvaluator(suite=declared_suite,
                 budgets={task: Budget(1, 30) for task in gains}, scope="software",
-                system2=Revision("development-screening", "1"), quota=quota),
+                system2=Revision("development-screening", "1"), quota=quota, max_replacements=max_replacements),
                 screening_resources={"cpu": 1}, minimum_success_rate=screening_threshold,
                 screen_incumbent=screen_incumbent)
         evaluator = evaluator_class(suite=declared_suite,
             budgets={task: Budget(1, 30) for task in gains}, scope="software",
-            system2=Revision("rollout-least-squares", "1"), quota=quota, **scheduling, **stages)
+            system2=Revision("rollout-least-squares", "1"), quota=quota,
+            max_replacements=max_replacements, **scheduling, **stages)
         return SelfHarness(directory, state=state, proposer=RolloutProposer(evaluator, evolver, archive=archive),
             evaluator=evaluator, selector=Selector(), evolution=EvolutionSpec(("control",)),
             archive=archive, max_candidates=max_candidates, scope="software", round_context=context,
