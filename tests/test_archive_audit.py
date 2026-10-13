@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from hashlib import sha256
 from pathlib import Path
 import os
+import shutil
 
 import pytest
 
@@ -112,7 +113,7 @@ def test_archive_never_uses_an_unhashed_view_to_skip_damaged_ancestry(tmp_path, 
         stream = opened(path, mode, *args, **kwargs)
         return checked_stream(stream) if path == view_path and mode == 'rb' and not changed else stream
     monkeypatch.setattr(Path, 'open', swapped)
-    with pytest.raises(ValueError, match='evidence changed'):
+    with pytest.raises(ValueError, match='evidence (directory )?changed'):
         archive.read(revisions[-1])
     assert changed
 
@@ -173,3 +174,90 @@ def test_mutating_a_returned_record_cannot_change_a_later_audit(tmp_path):
     changed['candidates'].clear()
     changed['files'].clear()
     assert archive.read(revisions[-1]) == expected
+
+
+def write_receipts(archive, revisions):
+    directories = []
+    for revision in revisions:
+        record = read_json(archive.root / 'entries' / revision / 'record.json')
+        directory = Path(record['source_round'])
+        atomic_json(directory / 'archive.json', dict(archive=archive.identity(), revision=revision))
+        directories.append(directory)
+    return directories
+
+
+def test_receipt_batch_checks_shared_ancestors_once_and_starts_fresh(tmp_path, monkeypatch):
+    groups = [archive_fixture(tmp_path / name, depth=depth) for name, depth in [('one', 5), ('two', 3)]]
+    directories = [d for archive, revisions, _ in groups for d in write_receipts(archive, revisions)]
+    calls = Counter()
+    original = CandidateArchive._read_one
+    def counted(self, revision, *args):
+        calls[(self.root, revision)] += 1
+        return original(self, revision, *args)
+    monkeypatch.setattr(CandidateArchive, '_read_one', counted)
+    # Repeated receipt directories still require their source binding, but do
+    # not rehash the same retained ancestor or evidence within this audit.
+    module.verify_archive_receipts([*directories, directories[0]])
+    assert calls == {(a.root, r): 1 for a, revisions, _ in groups for r in revisions}
+    archive, revisions, _ = groups[0]
+    path = archive.root / 'entries' / revisions[0] / 'evidence/nested/trace.bin'
+    saved = path.stat()
+    path.write_bytes(b'X' * saved.st_size)
+    os.utime(path, ns=(saved.st_atime_ns, saved.st_mtime_ns))
+    with pytest.raises(ValueError, match='evidence changed'):
+        module.verify_archive_receipts(directories)
+
+
+@pytest.mark.parametrize('damage', ['identity', 'source_round'])
+def test_batch_validates_every_receipt_even_when_its_entry_is_shared(tmp_path, damage):
+    archive, revisions, _ = archive_fixture(tmp_path)
+    directories = write_receipts(archive, revisions)
+    path = directories[0] / 'archive.json'
+    value = read_json(path)
+    if damage == 'identity':
+        value['archive']['implementation'] = '0' * 64
+    else:
+        value['revision'] = revisions[-1]
+    atomic_json(path, value)
+    with pytest.raises(ValueError, match='implementation changed|another round'):
+        module.verify_archive_receipts(reversed(directories))
+
+
+@pytest.mark.parametrize('damage', ['symlink', 'replacement', 'extra'])
+def test_directory_changes_during_entry_read_are_rejected(tmp_path, monkeypatch, damage):
+    archive, revisions, _ = archive_fixture(tmp_path, depth=1)
+    directory = archive.root / 'entries' / revisions[0] / 'evidence/nested'
+    original = module.file_digest
+    def changed(path):
+        value = original(path)
+        if path == directory / 'trace.bin':
+            if damage == 'extra':
+                (directory / 'unlisted.bin').write_bytes(b'unlisted')
+            else:
+                saved = directory.with_name('original-nested')
+                directory.rename(saved)
+                if damage == 'symlink':
+                    directory.symlink_to(saved, target_is_directory=True)
+                else:
+                    shutil.copytree(saved, directory)
+        return value
+    monkeypatch.setattr(module, 'file_digest', changed)
+    with pytest.raises(ValueError, match='physical directories|directory changed'):
+        archive.read(revisions[0])
+
+
+def test_entry_audit_reuses_directory_stats_but_rechecks_before_return(tmp_path, monkeypatch):
+    archive, revisions, _ = archive_fixture(tmp_path, depth=1)
+    folder = archive.root / 'entries' / revisions[0]
+    counts = Counter()
+    original = Path.lstat
+    def counted(path, *args, **kwargs):
+        counts[path] += 1
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'lstat', counted)
+    archive.read(revisions[0])
+    # Root, evidence and nested directories each get an initial and final
+    # identity check, regardless of how many files share their path prefix.
+    # Closure enumeration independently checks the evidence root once.
+    assert {p: counts[p] for p in (folder, folder / 'evidence', folder / 'evidence/nested')} == {
+        folder: 2, folder / 'evidence': 3, folder / 'evidence/nested': 2}

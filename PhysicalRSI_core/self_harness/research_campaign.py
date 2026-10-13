@@ -147,7 +147,7 @@ class ResearchCampaign:
                                memory_revision=self.initial_memory))
         revision = read_json(pointer)["revision"]
         cursor = self._read(revision)
-        history, seen = [], set()
+        history, seen, archived_rounds = [], set(), []
         check, key = cursor, revision
         while True:
             if key in seen or check["config_sha256"] != digest(config):
@@ -163,8 +163,7 @@ class ResearchCampaign:
             directory = self.root / "rounds" / f"round-{check['index']:04d}"
             if record["files"] != _manifest(directory):
                 raise ValueError("Completed research round changed")
-            from .archive import verify_archive_receipt
-            verify_archive_receipt(directory / "execution")
+            archived_rounds.append(directory / "execution")
             prior = self._read(check["previous"])
             if (check["index"] != prior["index"] + 1
                     or record["parent_revision"] != prior["harness_revision"]
@@ -172,6 +171,8 @@ class ResearchCampaign:
                 raise ValueError("Research round does not descend from its parent")
             history.append(record)
             key, check = check["previous"], prior
+        from .archive import verify_archive_receipts
+        verify_archive_receipts(archived_rounds)
         if cursor["index"] > self.max_rounds:
             raise ValueError("Campaign exceeds its round budget")
         history.reverse()

@@ -1,4 +1,5 @@
 from copy import deepcopy
+from collections import Counter
 from pathlib import Path
 import shutil
 
@@ -14,6 +15,33 @@ from PhysicalRSI_demos.rollout_evolution import setup as calibration_setup
 def archive_entries(root):
     archive = CandidateArchive(root / "archive")
     return archive, [archive.read(p.parent.name) for p in (archive.root / "entries").glob("*/record.json")]
+
+
+@pytest.mark.parametrize('kind', ['research', 'improvement'])
+def test_campaign_resume_batches_history_and_rechecks_before_new_effects(tmp_path, monkeypatch, kind):
+    if kind == 'research':
+        campaign, initial, suite, quota = calibration_setup(tmp_path)
+    else:
+        from test_improvement_campaign import setup as improvement_setup
+        campaign, initial, suite, quota = improvement_setup(tmp_path, with_archive=True)
+    result = campaign.run(initial)
+    resets, reservations = len(suite.resets), quota.status()
+    paths = list((tmp_path / 'archive/entries').glob('*/record.json'))
+    assert len(paths) == 2
+    counts = Counter()
+    original = CandidateArchive._read_one
+    def counted(self, revision, *args):
+        counts[revision] += 1
+        return original(self, revision, *args)
+    monkeypatch.setattr(CandidateArchive, '_read_one', counted)
+    assert campaign.run(initial) == result
+    assert counts == {p.parent.name: 1 for p in paths}
+    record = read_json(paths[0])
+    path = paths[0].parent / 'evidence' / next(n for n in record['files'] if n.endswith('trajectory.json'))
+    path.write_bytes(b'changed historical evidence')
+    with pytest.raises(ValueError, match='evidence changed'):
+        campaign.run(initial)
+    assert len(suite.resets) == resets and quota.status() == reservations
 
 
 def test_losing_branch_is_reused_with_new_parent_and_fresh_evidence(tmp_path):

@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import tempfile
 
 from ..infra.storage import atomic_json, digest, file_digest, identifier, locked, read_json, relative_path
@@ -29,6 +30,53 @@ def _physical(root, name):
     if not path.is_file():
         raise ValueError("Archive evidence is missing: " + name)
     return path
+
+
+class _ArchivePathAudit:
+    """Check shared directories once inside one immutable entry read.
+
+    Directory identities are rechecked before returning. This is a bounded
+    read audit on a cooperating store, not a lock on the live filesystem.
+    Leaves are always statted and their bytes are verified by the caller.
+    """
+
+    def __init__(self, root):
+        self.root = root
+        self.directories = {}
+
+    @staticmethod
+    def _directory(path):
+        try:
+            info = path.lstat()
+        except OSError as error:
+            raise ValueError("Archive evidence directory is missing") from error
+        if not stat.S_ISDIR(info.st_mode):
+            raise ValueError("Archive evidence must use physical directories")
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_mtime_ns, info.st_ctime_ns)
+
+    def file(self, name):
+        relative = relative_path(name)
+        if str(relative) != name:
+            raise ValueError("Archive evidence path is not canonical")
+        directory = self.root
+        for part in (None, *relative.parts[:-1]):
+            if part is not None:
+                directory = directory / part
+            if directory not in self.directories:
+                self.directories[directory] = self._directory(directory)
+        path = self.root / relative
+        try:
+            mode = path.lstat().st_mode
+        except OSError as error:
+            raise ValueError("Archive evidence is missing: " + name) from error
+        if not stat.S_ISREG(mode):
+            raise ValueError("Archive evidence must be physical files")
+        return path
+
+    def finish(self):
+        for path, expected in self.directories.items():
+            if self._directory(path) != expected:
+                raise ValueError("Archive evidence directory changed during audit")
 
 
 class CandidateArchive:
@@ -257,7 +305,8 @@ class CandidateArchive:
 
     def _read_one(self, revision, harnesses):
         folder = self.root / "entries" / _sha(revision)
-        payload = _physical(folder, "record.json").read_bytes()
+        paths = _ArchivePathAudit(folder)
+        payload = paths.file("record.json").read_bytes()
         value = json.loads(payload)
         if digest(value) != revision or value.get("schema") != "physicalrsi.archive-round/v1":
             raise ValueError("Archived record changed")
@@ -271,7 +320,10 @@ class CandidateArchive:
             raise ValueError("Archived evidence closure changed")
         view = None
         for name, sha in value["files"].items():
-            path = _physical(evidence, name)
+            # Validate the declaration before adding the evidence prefix.
+            if str(relative_path(name)) != name:
+                raise ValueError("Archive evidence path is not canonical")
+            path = paths.file("evidence/" + name)
             if name == "archive-view.json":
                 checked = path.read_bytes()
                 actual_sha = sha256(checked).hexdigest()
@@ -283,8 +335,9 @@ class CandidateArchive:
                 view = json.loads(checked)
                 if not isinstance(view, dict):
                     raise ValueError("Invalid archived search view")
-        if file_digest(_physical(folder, "record.json")) != sha256(payload).hexdigest():
+        if file_digest(paths.file("record.json")) != sha256(payload).hexdigest():
             raise ValueError("Archived record changed during audit")
+        paths.finish()
         return dict(revision=revision, **value), view
 
     def view(self, *, scope, policy_sha256):
@@ -449,12 +502,30 @@ class CandidateArchive:
 
 def verify_archive_receipt(directory):
     """Audit optional archive ownership when a campaign reopens old rounds."""
-    path = Path(directory) / "archive.json"
-    if path.exists():
+    verify_archive_receipts([directory])
+
+
+def verify_archive_receipts(directories):
+    """Audit completed rounds together, sharing ancestors only in this call.
+
+    Group by owned archive, check every receipt and round binding, and perform
+    one fresh traversal per archive before the campaign may execute more work.
+    """
+    groups = {}
+    for directory in directories:
+        directory = Path(directory).resolve()
+        path = directory / "archive.json"
+        if not path.exists():
+            continue
         receipt = read_json(path)
         archive = CandidateArchive(receipt["archive"]["root"])
         if archive.identity() != receipt["archive"]:
             raise ValueError("Candidate archive implementation changed")
-        record = archive.read(receipt["revision"])
-        if record["source_round"] != str(Path(directory).resolve()):
-            raise ValueError("Archive receipt belongs to another round")
+        if archive.root not in groups:
+            groups[archive.root] = (archive, [])
+        groups[archive.root][1].append((directory, _sha(receipt["revision"])))
+    for archive, receipts in groups.values():
+        records = archive._read_many(revision for _, revision in receipts)
+        for directory, revision in receipts:
+            if records[revision]["source_round"] != str(directory):
+                raise ValueError("Archive receipt belongs to another round")

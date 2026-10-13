@@ -69,12 +69,12 @@ class ImprovementCampaign:
             if (record["index"] != index or record["parent_revision"] != expected
                     or record["files"] != _manifest(directory)):
                 raise ValueError("Completed campaign round changed")
-            from .archive import verify_archive_receipt
-            verify_archive_receipt(directory)
             saved = self.state.read(record["result_revision"])
             if (saved["revision"] != expected and saved["previous"] != expected):
                 raise StateConflict("Campaign result does not descend from its parent")
             expected = saved["revision"]
+        from .archive import verify_archive_receipts
+        verify_archive_receipts(self._directory(index) for index in range(len(ledger["rounds"])))
         if "stop" in ledger:
             if (current["revision"] != expected or
                     ledger["stop"]["files"] != _manifest(self._directory(len(ledger["rounds"])))):

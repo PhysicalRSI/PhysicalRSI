@@ -100,7 +100,7 @@ class Selector:
         return selection.select_survivor(*args, **kwargs)
 
 
-def setup(tmp_path, *, max_trials=6, max_rounds=2, score_measurement=None):
+def setup(tmp_path, *, max_trials=6, max_rounds=2, score_measurement=None, with_archive=False):
     seed = tmp_path / "seed"
     for kind in CLOSURE:
         atomic_json(seed / (kind + ".json"), dict(increment=2) if kind == "control" else dict(kind=kind))
@@ -111,10 +111,12 @@ def setup(tmp_path, *, max_trials=6, max_rounds=2, score_measurement=None):
     evaluator = ExperimentEvaluator(suite=suite, budgets={"counter": Budget(10, 30)},
                                     scope="software", system2=Revision("test-repair", "1"), quota=quota,
                                     score_measurement=score_measurement)
+    from PhysicalRSI_core.self_harness.archive import CandidateArchive
+    archive = CandidateArchive(tmp_path / "archive") if with_archive else None
 
     def build_loop(directory):
         return SelfHarness(directory, state=state, proposer=Proposal(evaluator), evaluator=evaluator,
-                           selector=Selector(), scope="software", max_candidates=1,
+                           selector=Selector(), scope="software", max_candidates=1, archive=archive,
                            profile=dict(tasks={"counter": dict(weight=1, episodes=2,
                                score_range=[0, 1], maximum_regression=0)}, minimum_gain=0, tie_tolerance=1e-10),
                            protocol=dict(identity=evaluator.revision, evaluation_kind="local_contract_evaluation"))

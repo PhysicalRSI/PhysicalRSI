@@ -332,6 +332,36 @@ links and non-regular files, including undeclared FIFOs. The archive identity pi
 the snapshot and file-enumeration helpers as well as its own implementation.
 Existing frozen studies must be inspected with their recorded source version.
 
+Campaign recovery batches completed-round archive receipts by owned archive.
+Every receipt still checks its implementation and source-round binding, while
+shared historical entries and candidate snapshots are verified once within that
+call. Separate `run`, `report_test` and archive reads start fresh audits; no
+verification state survives provider execution or a later restart. Within an
+entry, physical directory checks are shared across evidence files and directory
+identities are checked again before returning. Every leaf is checked as a regular
+file and all evidence bytes are hashed. Directory replacement, new entries and
+symlinks observed during the audit invalidate it. These checks assume cooperating
+POSIX storage and do not provide an atomic snapshot against hostile concurrent
+filesystem changes.
+
+The retained `archive-restart-001` comparison uses independently frozen baseline
+and updated sources. Both four-round CPU adaptive-control campaigns executed 172
+Trials. After matching candidates by executable revision, the task/case/split,
+trajectory digests, verdicts, quotas and selection outcomes agree. Five repeated
+reopen measurements of `run` plus `report_test` had median elapsed times of 2.699
+and 0.782 seconds (71.0% lower). Each reopened 2,979 files without new Trials or
+actions, and all file bytes and modes remained unchanged. A profiled reopen
+reduced archive entry reads from 20 to 8, across two separate fresh audits.
+
+Synthetic shared-history fixtures at 8, 32 and 64 retained rounds checked entry
+reads of 36/528/2,080 before batching and 8/32/64 afterward. The 64-round fixture
+took 25.58 versus 0.28 seconds. This counts full entry audits; stored ancestor-view
+references still grow with history. Timing is local CPU/RAM-backed filesystem
+evidence, not a distributed-storage guarantee or an improvement in task success.
+All 646 tests passed. Sources, profiles, raw reports and byte/mode-verified rollout
+archives are retained at
+`/cpfs02/user/yanming/physicalrsi-core-checks/archive-restart-001`.
+
 Pass the same archive to `SelfHarness(..., archive=archive)` and
 `RolloutProposer(evaluator, evolver, archive=archive)`. Keep its directory
 outside all campaign round evidence. The rollout-calibration and native Isaac
