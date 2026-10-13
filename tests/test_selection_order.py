@@ -68,6 +68,35 @@ def paired_comparison(tmp_path, parent_scores, child_scores, *, costs=None, cost
     return comparison, cohort, results
 
 
+@pytest.mark.parametrize('damage', ['changed', 'missing', 'conflicting'])
+def test_shared_selection_evidence_is_verified_once_per_call(tmp_path, monkeypatch, damage):
+    from PhysicalRSI_core.self_harness import selection
+    comparison, cohort, results = paired_comparison(tmp_path, [.2] * 32, [.8] * 32)
+    source = tmp_path / 'observation.json'
+    reads = []
+    original = selection.file_digest
+
+    def observe(path):
+        reads.append(path)
+        return original(path)
+
+    monkeypatch.setattr(selection, 'file_digest', observe)
+    first = select_survivor(comparison, cohort, results, evidence_root=tmp_path)
+    assert first['survivor_id'] == 'child'
+    assert reads == [source]
+    reads.clear()
+    assert select_survivor(comparison, cohort, results, evidence_root=tmp_path) == first
+    assert reads == [source]
+    if damage == 'changed':
+        source.write_text('changed')
+    elif damage == 'missing':
+        source.unlink()
+    else:
+        results[1]['episodes'][-1]['evidence_sha256']['observation.json'] = '0' * 64
+    with pytest.raises(ValueError, match='Native evidence'):
+        select_survivor(comparison, cohort, results, evidence_root=tmp_path)
+
+
 def test_equal_paired_scores_cannot_promote_by_reordering_episodes(tmp_path):
     comparison, cohort, results = paired_comparison(tmp_path, [1., 1e-16, 1e-16], [1., 1e-16, 1e-16])
     expected = select_survivor(comparison, cohort, results, evidence_root=tmp_path)

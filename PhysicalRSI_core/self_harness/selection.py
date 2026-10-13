@@ -229,6 +229,7 @@ def select_survivor(
     metrics = {}
     paired_scores = {}
     revisions = set()
+    verified_evidence = {}
     for result in results:
         name = result["candidate_id"]
         if (
@@ -276,11 +277,12 @@ def select_survivor(
                 if (
                     not path.is_relative_to(root)
                     or not path.is_file()
-                    or file_digest(path) != _sha(sha)
+                    or (verified_evidence[path] if path in verified_evidence else file_digest(path)) != _sha(sha)
                 ):
                     raise ValueError(
                         "Native evidence missing, changed or outside the evidence root"
                     )
+                verified_evidence[path] = sha
             scores[pair[0]].append((score - low) / (high - low))
             paired_scores[name][pair] = (score - low) / (high - low)
             success[pair[0]].append(row["success"])

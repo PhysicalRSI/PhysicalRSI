@@ -291,6 +291,11 @@ the common contracts. Unknown effects still require reconciliation; a common
 interface does not authorize retries. Success, failure, uncertain and invalid
 remain distinct. Final tests remain report-only.
 
+Paired selection hashes each shared physical evidence file once per call,
+while checking every reference's declared digest and containment. Conflicting
+digests are rejected, and every later selection call reads the files afresh;
+this does not cache evidence verification across decisions.
+
 The Trial runtime and `ExperimentEvaluator` share `runtime_implementation()`,
 an explicit hash map of their owned execution dependencies: runtime, contracts,
 Trial types, artifact capture, evidence reading, embodiment, timing, device
