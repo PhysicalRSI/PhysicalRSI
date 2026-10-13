@@ -368,6 +368,21 @@ class ExperimentRuntime:
                        system2=specification["system2"], execution_phase='admitted')
         atomic_json(folder / "receipt.json", receipt)
         start = monotonic()
+        phase, phase_start = "preparation", start
+        phase_seconds = dict.fromkeys(("preparation", "reset", "rollout", "verification", "finalization", "cleanup"), 0.)
+
+        def enter_phase(name):
+            nonlocal phase, phase_start
+            current = monotonic()
+            phase_seconds[phase] += current - phase_start
+            phase, phase_start = name, current
+
+        def record_timing():
+            enter_phase(phase)
+            receipt["timing"] = dict(schema="physicalrsi.trial-timing/v1",
+                                     phase_seconds=dict(phase_seconds))
+            receipt["elapsed_seconds"] = phase_start - start
+
         context = Context(run_id, deadline=start + budget.seconds,
                           harness_revision=binding.system1.revision if binding else "")
         case = specification["case"]
@@ -402,10 +417,12 @@ class ExperimentRuntime:
         try:
             stable()
             context.check()
+            enter_phase('reset')
             receipt['execution_phase'] = 'reset'
             atomic_json(folder / 'receipt.json', receipt)
             initial = _json(environment.reset(deepcopy(case), context))
             atomic_json(folder / "reset.json", initial)
+            enter_phase('rollout')
             receipt['execution_phase'] = 'episode'
             atomic_json(folder / 'receipt.json', receipt)
             context.check()
@@ -453,12 +470,14 @@ class ExperimentRuntime:
                         break
                 stop_policy()
                 stable()
+                enter_phase("verification")
                 verdict = _json(verifier.verify(deepcopy(case), deepcopy(trace)))
                 context.check()
                 if verdict.get("outcome") not in {"success", "failure", "uncertain"}:
                     raise ValueError("Verifier must return success, failure or uncertain")
                 if not verdict.get("reason") or not isinstance(verdict.get("measurements"), dict):
                     raise ValueError("Verifier must supply a reason and measured evidence")
+            enter_phase("finalization")
             stop_policy()
             if claim:
                 context.check()
@@ -480,16 +499,19 @@ class ExperimentRuntime:
             atomic_json(folder / "verdict.json", verdict)
             receipt.update(state="completed", outcome=verdict["outcome"], verdict=verdict,
                            execution_phase='completed',
-                           steps=max(0, len(trace) - 1), elapsed_seconds=monotonic() - start,
+                           steps=max(0, len(trace) - 1),
                            termination=termination,
                            evidence={name: file_digest(folder / name) for name in sorted(evidence_names)})
+            record_timing()
             atomic_json(folder / "receipt.json", receipt)
             return self.read(run_id)
         except BaseException as error:
+            enter_phase("cleanup")
             try:
                 stop_policy()
             except BaseException as cleanup_error:
                 receipt["policy_cleanup_error"] = type(cleanup_error).__name__
+            record_timing()
             receipt.update(state="needs_reconciliation", error=type(error).__name__ + ": " + str(error))
             if getattr(error, "request_id", None):
                 receipt["controller_request_id"] = error.request_id

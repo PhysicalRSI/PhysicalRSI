@@ -77,3 +77,69 @@ def test_modified_evidence_cannot_be_reused(tmp_path):
     (tmp_path/'trial/trajectory.json').write_text('[]')
     with pytest.raises(ValueError,match='evidence changed'):
         run(runtime)
+
+
+@pytest.mark.parametrize('failure', [None, 'reset', 'step', 'verification'])
+def test_phase_timings_separate_execution_verification_evidence_and_interrupted_cleanup(tmp_path, monkeypatch, failure):
+    from PhysicalRSI_core import contracts, experiments
+
+    clock = [1000.]
+    monkeypatch.setattr(experiments, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(contracts, 'monotonic', lambda: clock[0])
+    original_digest = experiments.file_digest
+
+    def measured_digest(path):
+        if path.name == 'verdict.json':
+            clock[0] += 11  # Final evidence hashing belongs to finalization.
+        return original_digest(path)
+
+    monkeypatch.setattr(experiments, 'file_digest', measured_digest)
+
+    class TimedEnvironment(CounterEnvironment):
+        def reset(self, case, context):
+            clock[0] += 3
+            if failure == 'reset':
+                raise RuntimeError('reset interrupted')
+            return super().reset(case, context)
+
+        def step(self, action, context):
+            clock[0] += 5
+            if failure == 'step':
+                raise RuntimeError('step interrupted')
+            return super().step(action, context)
+
+    class TimedPolicy(CounterPolicy):
+        def act(self, observation, context):
+            clock[0] += 2
+            return super().act(observation, context)
+
+        def end_episode(self, context):
+            clock[0] += 13
+            return dict(stopped=True)
+
+    class TimedVerifier(CounterVerifier):
+        def verify(self, case, trace):
+            clock[0] += 7
+            if failure == 'verification':
+                raise RuntimeError('verification interrupted')
+            return super().verify(case, trace)
+
+    runtime = ExperimentRuntime(tmp_path)
+    options = dict(environment=TimedEnvironment(), policy=TimedPolicy(), verifier=TimedVerifier(),
+                   case=dict(initial=0, target=1), budget=Budget(1, 100))
+    if failure is None:
+        receipt = run(runtime, **options)
+        assert run(runtime, **options) == receipt
+        expected = dict(preparation=0, reset=3, rollout=20, verification=7, finalization=11, cleanup=0)
+    else:
+        with pytest.raises(RuntimeError, match='interrupted'):
+            run(runtime, **options)
+        receipt = json.loads((tmp_path / 'trial/receipt.json').read_text())
+        expected = dict(preparation=0, reset=3, rollout=0 if failure == 'reset' else 7 if failure == 'step' else 20,
+                        verification=7 if failure == 'verification' else 0, finalization=0,
+                        cleanup=13 if failure == 'step' else 0)
+        assert receipt['state'] == 'needs_reconciliation'
+        with pytest.raises(ReconciliationRequired):
+            run(runtime, **options)
+    assert receipt['timing'] == dict(schema='physicalrsi.trial-timing/v1', phase_seconds=expected)
+    assert receipt['elapsed_seconds'] == sum(expected.values())

@@ -236,12 +236,27 @@ def test_clearance_feedback_requires_grasp_and_disturbance(aperture,disturbed,ex
     assert ClearanceFeedback().classify(value)==expected
 
 
-def test_native_empirical_contract_uses_complete_panels_and_two_mutable_parameters(tmp_path,monkeypatch):
+class EmpiricalContractWorker(ContractWorker):
+    """Give every changed vector a known success to test feedback plumbing.
+
+    The runtime identity participates in sampler seeding. Contract assertions
+    must not depend on an incidental random draw crossing a height threshold.
+    Native studies use the unmodified physical verifier instead.
+    """
+    def execute(self, action, context):
+        memory = action['memory']
+        unchanged = (memory['transit_height_m'], memory['grasp_depth_fraction']) == (.13, .25)
+        self.success_height = .55 if unchanged else .09
+        return super().execute(action, context)
+
+
+@pytest.mark.parametrize('sampler_seed', [0, 20261013])
+def test_native_empirical_contract_uses_complete_panels_and_two_mutable_parameters(tmp_path,monkeypatch,sampler_seed):
     from PhysicalRSI_demos.auto_engineering import empirical
-    monkeypatch.setattr(trials,'NativeWorker',ContractWorker)
-    ContractWorker.resets=[]
+    monkeypatch.setattr(trials,'NativeWorker',EmpiricalContractWorker)
+    EmpiricalContractWorker.resets=[]
     panels=dict(development=[1000,50001],validation=[[62000,62001],[62100,62101]],test=[63000,63001,63002])
-    result=empirical.run(tmp_path,sys.executable,panels=panels,strategy='adaptive',seed=20261013)
+    result=empirical.run(tmp_path,sys.executable,panels=panels,strategy='adaptive',seed=sampler_seed)
     fits=[read_json(p) for p in sorted((tmp_path/'campaign/rounds').glob('*/execution/adaptive-fit.json'))]
     assert len(fits)==2 and [f['model_ready'] for f in fits]==[False,True]
     assert len(fits[0]['panel'])==len(fits[1]['panel'])==2
@@ -251,11 +266,11 @@ def test_native_empirical_contract_uses_complete_panels_and_two_mutable_paramete
     assert all(len(p['values'])==2 and .1<=p['values'][0]<=.55 and .15<=p['values'][1]<=.4
                for f in fits for p in f['proposals'])
     assert all(s['case']['seed'] in {1000,50001} for f in fits for s in f['samples'])
-    assert result['quota']['max_trials']==27 and result['quota']['reserved_trials']==len(ContractWorker.resets)
+    assert result['quota']['max_trials']==27 and result['quota']['reserved_trials']==len(EmpiricalContractWorker.resets)
     assert result['qualification'] is None
-    before=len(ContractWorker.resets)
-    assert empirical.run(tmp_path,sys.executable,panels=panels,strategy='adaptive',seed=20261013)==result
-    assert len(ContractWorker.resets)==before
+    before=len(EmpiricalContractWorker.resets)
+    assert empirical.run(tmp_path,sys.executable,panels=panels,strategy='adaptive',seed=sampler_seed)==result
+    assert len(EmpiricalContractWorker.resets)==before
     scheduler=read_json(tmp_path/'campaign/rounds/round-0001/execution/config.json')['identities']['evaluator']['scheduling']
     assert scheduler['workers']==1
     candidate=result['current']['harness']
@@ -299,7 +314,7 @@ def test_native_empirical_rejects_ambiguous_panels_before_workspace_creation(tmp
 def test_empirical_screening_startup_recovery_preserves_search_and_budget(tmp_path, monkeypatch):
     from PhysicalRSI_demos.auto_engineering import empirical
 
-    class InterruptedScreening(ContractWorker):
+    class InterruptedScreening(EmpiricalContractWorker):
         resets = []
         failed = False
 

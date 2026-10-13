@@ -51,12 +51,16 @@ def test_out_of_order_candidates_are_paired_and_restart_does_not_rerun(tmp_path,
 def test_completed_rollouts_recover_after_queue_publication_failure(tmp_path, monkeypatch):
     campaign, initial, suite, quota = setup(tmp_path, scheduled_workers=2)
     complete = JobScheduler._complete
-    stopped = False
+    stopped = None
 
     def interrupt(self, key, result, **kwargs):
         nonlocal stopped
-        if not stopped:
-            stopped = True
+        if stopped is None:
+            stopped = key
+        # Keep publication unavailable for this job until the fault is removed.
+        # A concurrent read-only collector must not repair a one-shot fault
+        # before the test can inspect the retained reservation.
+        if key == stopped:
             raise RuntimeError("completion publication interrupted")
         return complete(self, key, result, **kwargs)
 

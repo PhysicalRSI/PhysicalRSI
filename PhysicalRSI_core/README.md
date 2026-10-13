@@ -66,6 +66,14 @@ receipts with retained execution evidence also block execution. See
 [explicit replacement](../docs/core-development.md#explicit-replacement-after-an-interrupted-reset)
 for the API, owned evidence, budget accounting and current recovery boundary.
 
+New terminal Trial receipts include `timing.phase_seconds` for preparation,
+reset, rollout, verification, finalization and interrupted cleanup. These use the
+runtime's monotonic clock and sum to `elapsed_seconds`. Reset/rollout include their
+local evidence writes; finalization includes quiescence, evidence export and
+hashing. Timing starts after the initial receipt is written and ends before the
+terminal receipt is committed and audited. Historical receipts may omit timing;
+these measurements diagnose execution cost and do not change task scores.
+
 Deadlines are cooperative. Adapters must bound device calls and honor `Context.check()`. Physical declarations require named resources and an explicitly shared `infra.devices.DeviceRegistry`. Its leases coordinate cooperating processes on one local controller host, retain uncertain ownership across interruption, and require confirmed quiescence before release. They do not stop hardware or fence another controller host. The runtime verifies local evidence and identity consistency; it cannot guarantee sensor accuracy, verifier accuracy, physical reproducibility or process isolation.
 
 ## Self-Harness
