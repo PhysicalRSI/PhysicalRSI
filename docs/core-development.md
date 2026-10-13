@@ -156,6 +156,12 @@ proposals. Weights remain relative priorities, independent of episode counts.
 All three stages first scale weights by their maximum, then normalize their
 sum. Individually finite positive weights remain usable even when their raw
 sum would overflow; the statistical confidence radius uses the same ratios.
+The multiple-comparison correction is evaluated in log space. Strict positive
+alpha values can produce finite, persistable rejection evidence even when
+`max_comparisons / alpha` would overflow; the confidence rule is unchanged.
+A two-round integration check with strict alpha retains the parent despite
+observed improvements on both action contracts, persists finite rejection
+bounds, and reopens without repeating any of its 22 Trials.
 Screening also uses exact-ratio means within each task, so repeating identical
 normalized feedback cannot perturb its task score or relative task priority.
 Native score bounds must also have a finite positive span, as in screening;

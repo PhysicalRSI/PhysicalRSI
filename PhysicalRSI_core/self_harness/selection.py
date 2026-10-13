@@ -316,7 +316,10 @@ def select_survivor(
         # candidate comparisons, including adaptive rounds with fresh cases.
         variance_bound = math.fsum((weights[task] / total_weight) ** 2 / spec["episodes"]
                                    for task, spec in tasks.items())
-        radius = math.sqrt(2 * math.log(statistics["max_comparisons"] / statistics["alpha"]) * variance_bound)
+        # Form the ratio in log space: a valid small alpha can overflow the
+        # quotient even though the confidence radius is finite.
+        log_correction = math.log(statistics["max_comparisons"]) - math.log(statistics["alpha"])
+        radius = math.sqrt(2 * log_correction * variance_bound)
     for name, metric in metrics.items():
         if name == parent:
             continue

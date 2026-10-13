@@ -98,3 +98,33 @@ def test_relative_weight_overflow_preserves_scores_and_confidence(tmp_path):
         decisions.append(value)
     assert decisions[0]['metrics'] == decisions[1]['metrics']
     assert decisions[0]['rejected'] == decisions[1]['rejected']
+
+
+@pytest.mark.parametrize('alpha', [1e-308, 1e-320])
+def test_strict_confidence_decision_stays_finite_and_persistable(tmp_path, alpha):
+    from decimal import Decimal, localcontext
+    import math
+    from PhysicalRSI_core.infra.storage import read_json
+    from PhysicalRSI_core.self_harness.selection import write_selection
+
+    frozen, cohort, results = comparison(tmp_path)
+    frozen['profile']['statistics']['alpha'] = alpha
+    cohort['comparison_sha256'] = digest(frozen)
+    for result in results:
+        result.update(comparison_sha256=digest(frozen), cohort_sha256=digest(cohort))
+    value = select_survivor(frozen, cohort, results, evidence_root=tmp_path)
+    evidence = value['metrics']['child']['improvement_evidence']
+    assert value['decision'] == 'retain_parent'
+    assert value['rejected']['child']['reason'] == 'insufficient_evidence'
+    assert math.isfinite(evidence['lower_bound'])
+    with localcontext() as context:
+        context.prec = 50
+        radius = (2 * (Decimal(10) / Decimal.from_float(alpha)).ln() / 40).sqrt()
+    assert evidence['lower_bound'] == pytest.approx(1 - float(radius))
+    assert evidence['alpha_per_comparison'] > 0
+    path = tmp_path / 'selection.json'
+    write_selection(path, value)
+    assert read_json(path) == value
+    with pytest.raises(FileExistsError):
+        write_selection(path, value)
+    assert read_json(path) == value

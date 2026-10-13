@@ -82,3 +82,34 @@ def test_unrepresentable_score_span_is_rejected_before_rollout(tmp_path, monkeyp
     assert suite.resets == []
     assert quota.status()['reserved_trials'] == 0
     assert not (campaign.state.root / 'current.json').exists()
+
+
+def test_strict_confidence_campaign_retains_parent_and_resumes_without_rollouts(tmp_path, monkeypatch):
+    import math
+    from PhysicalRSI_demos import rollout_evolution as demo
+    initialize = demo.SelfHarness
+
+    def strict_profile(*args, **kwargs):
+        kwargs['profile'] = deepcopy(kwargs['profile'])
+        kwargs['profile']['statistics'] = dict(method='paired-hoeffding', alpha=1e-320, max_comparisons=2)
+        return initialize(*args, **kwargs)
+
+    monkeypatch.setattr(demo, 'SelfHarness', strict_profile)
+    campaign, initial, suite, quota = setup(tmp_path, max_trials=22)
+    result = campaign.run(initial)
+    assert [row['outcome'] for row in result['rounds']] == ['retain_parent', 'retain_parent']
+    assert result['current']['harness']['id'] == initial['id']
+    decisions = sorted((campaign.root / 'rounds').glob('*/execution/selection.json'))
+    assert len(decisions) == 2
+    for path in decisions:
+        decision = read_json(path)['output']
+        assert decision['decision'] == 'retain_parent'
+        assert all(row['reason'] == 'insufficient_evidence' for row in decision['rejected'].values())
+        children = [metric for name, metric in decision['metrics'].items() if name != initial['id']]
+        assert children and all(math.isfinite(row['improvement_evidence']['lower_bound']) for row in children)
+        assert all(row['improvement_evidence']['normalized_gain'] == 1 for row in children)
+    final = campaign.report_test(initial)
+    assert len(suite.resets) == quota.status()['reserved_trials'] == 22
+    reopened, seed, fresh, _ = setup(tmp_path, max_trials=22)
+    assert reopened.run(seed) == result and reopened.report_test(seed) == final
+    assert not fresh.resets and quota.status()['reserved_trials'] == 22
