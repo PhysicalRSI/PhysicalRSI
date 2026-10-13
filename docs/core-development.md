@@ -1907,3 +1907,48 @@ The `test-parallel` extra makes this mode optional. Keep two workers as the
 measured starting point, preserve per-worker temporary-directory isolation, and
 inspect failures before changing concurrency or rerunning tests. Native device
 leases, rollout quotas and physical acceptance scheduling remain separate.
+
+
+### Interrupted matched native pilot, 2026-10-14
+
+`/cpfs02/user/yanming/physicalrsi-core-checks/native-matched-bench-001`
+compared adaptive and uniform search from the same initial harness, with two
+rounds, population two, sampler seed 20261014 and a 22-Trial cap per search arm.
+Development seed 2026101400, validation panels 2026101401–1402 and
+2026101403–1404, and final test seeds 2026101410–1413 were disjoint. The
+frozen source matches `5c5cbdb2edde21e4a82a03d2e03bb3ce020637dc` except for
+local AGENTS.md instructions. Later sampling and elite-weighting changes were
+not part of this study.
+
+| Arm | Search Trials completed | Final test successes / planned |
+| --- | ---: | --- |
+| Fixed initial harness | 0 | 1 / 4 |
+| Adaptive search | 10 | 4 / 4 |
+| Uniform search | 12 | Unavailable: first test interrupted |
+
+The adaptive final harness used lift height 0.418 and grasp width 0.250;
+uniform selected 0.417 and 0.249. Both were promoted from global warmup.
+Second-round fitted adaptive proposals did not earn further promotion.
+The observed improvement over the initial harness is 75 percentage points on
+four held-out cases; it does not establish adaptive superiority or generality.
+The pilot's random stream included runtime identity, so arm-specific cache paths
+also changed proposals despite the same configured sampler seed. Repeated
+initial-harness checks varied between arms. These limitations prevent a clean
+attribution to the search strategy even apart from the interrupted final panel.
+
+At 2026-10-13 16:19:49 UTC, the driver terminated during uniform test seed
+2026101410. The Python crash trace places the native failure in
+`initial_sensor_frames -> world.render`, after the 90 settling steps and before
+publishing the initial observation or dispatching the policy. Native frames
+include `UsdGeomBBoxCache::SetTime`, USD stage loading and timeline callbacks.
+This identifies the crash site, not its root cause. The receipt remains
+`needs_reconciliation`; it is not a measured policy failure. The remaining
+three uniform tests were not executed. The preregistered no-replacement rule
+was preserved; the driver was not restarted.
+
+There are 30 canonical completed Trials and one interrupted Trial. Archived
+receipt copies must not be counted again. `interruption-audit.json` retains
+state counts and hashes of the crash evidence. The two completed final reports
+were joined back to candidate hashes, case hashes, receipt verdicts and all
+seven physical checks by the read-only comparator. No complete three-arm result
+or algorithm-superiority claim is available from this pilot.
