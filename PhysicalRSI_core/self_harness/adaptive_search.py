@@ -8,6 +8,7 @@ from itertools import chain
 import math
 from pathlib import Path
 from random import Random
+from statistics import mean
 
 from ..infra.storage import digest, file_digest
 from .artifacts import verify_harness
@@ -126,8 +127,10 @@ class AdaptiveParameterEvolver:
         for values,cases in grouped.items():
             if set(cases)!=set(panel) or any(any(s is None for s in scores) for scores in cases.values()):
                 incomplete.append(dict(values=list(values),reason='incomplete_development_panel'));continue
-            means={case:sum(scores)/len(scores) for case,scores in cases.items()}
-            per_task={t:sum(means[c] for c,p in panel.items() if p['task']==t)/sum(p['task']==t for p in panel.values()) for t in self.weights}
+            # Exact-ratio accumulation preserves flat feedback when repeat counts or
+            # archive iteration order differ; rounding must not create a signal.
+            means={case:float(mean(scores)) for case,scores in cases.items()}
+            per_task={t:float(mean(means[c] for c,p in panel.items() if p['task']==t)) for t in self.weights}
             score=sum(per_task[t]*w for t,w in self.weights.items())/sum(self.weights.values())
             ranked.append(dict(values=list(values),score=score,per_task=per_task,case_scores=means))
         ranked.sort(key=lambda r:(-r['score'],r['values']))

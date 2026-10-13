@@ -410,3 +410,38 @@ def test_changed_evolver_identity_and_existing_candidate_are_rejected(tmp_path):
     with pytest.raises(ValueError):evolver.resume_proposal_from_archive(*args)
     evolver.settings['seed']+=1
     with pytest.raises(ValueError,match='implementation changed'):evolver.resume_proposal_from_archive(*args)
+
+
+@pytest.mark.parametrize('score', [.1, .7])
+def test_identical_repeated_scores_do_not_create_a_search_signal(tmp_path, score):
+    observed = candidate(tmp_path / 'observed', (5., 3.))
+    history = []
+    for repeat in range(3):
+        history.extend(rows(observed, values(tmp_path / ('repeat-' + str(repeat)), observed)))
+    evolver, args = build(tmp_path / 'study', history=history,
+        objective=PanelObjective(default=score), minimum_observations=2)
+    evolver.propose_from_archive(*args)
+    fit = read_json(args[-1] / 'adaptive-fit.json')
+    assert len(fit['samples']) == 8  # Independent repeats are retained, not deduplicated.
+    assert len(fit['ranked']) == 2
+    assert all(row['score'] == score for row in fit['ranked'])
+    assert not fit['score_contrast'] and not fit['model_ready']
+    assert fit['reason'] == 'flat_development_scores'
+    assert all(proposal['role'] == 'global' for proposal in fit['proposals'])
+
+
+def test_repeated_feedback_mean_is_independent_of_archive_order(tmp_path):
+    history = []
+    scores = {'large': 1., 'tiny-a': 1e-16, 'tiny-b': 1e-16}
+    for name in scores:
+        previous = candidate(tmp_path / name, (5., 3.))
+        history.extend(rows(previous, values(tmp_path / (name + '-trials'), previous)))
+    fits = []
+    for index, observed in enumerate((history, list(reversed(history)))):
+        evolver, args = build(tmp_path / str(index), history=observed,
+                             objective=PanelObjective(scores))
+        evolver.propose_from_archive(*args)
+        fits.append(read_json(args[-1] / 'adaptive-fit.json'))
+    assert fits[0]['ranked'] == fits[1]['ranked']
+    assert fits[0]['elite'] == fits[1]['elite']
+    assert fits[0]['proposals'] == fits[1]['proposals']

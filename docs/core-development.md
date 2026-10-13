@@ -1436,6 +1436,11 @@ scores are equal, the whole population explores globally. A flat score panel
 does not provide an evidence-based direction for local search. All vectors tied
 at the elite cutoff are included, rather than selecting ties by coordinate order.
 The declared minimum spread also applies when only one elite is available.
+Within-case repeat averages and within-task case averages use exact-ratio
+accumulation before conversion back to a float. Identical scores remain equal
+when repeat counts differ, and archive iteration order does not alter those
+averages. This removes numerical pseudo-contrast; it does not estimate uncertainty
+or make genuine small score differences statistically significant.
 Repeated receipts, partial task panels and incomparable observations
 cannot satisfy this threshold. This is an explicit exploration heuristic, not
 a confidence bound or a guarantee of geometric coverage. Every fit records
