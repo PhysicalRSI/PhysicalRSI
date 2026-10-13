@@ -153,6 +153,9 @@ Task weights are normalized before multiplying scores in selection and adaptive
 search, matching screening. This prevents subnormal positive weights from
 rounding away measured improvements and incorrectly disabling archive-guided
 proposals. Weights remain relative priorities, independent of episode counts.
+All three stages first scale weights by their maximum, then normalize their
+sum. Individually finite positive weights remain usable even when their raw
+sum would overflow; the statistical confidence radius uses the same ratios.
 Screening also uses exact-ratio means within each task, so repeating identical
 normalized feedback cannot perturb its task score or relative task priority.
 Native score bounds must also have a finite positive span, as in screening;

@@ -75,3 +75,26 @@ def test_multiple_comparison_correction_changes_evidence_threshold(tmp_path):
         result.update(comparison_sha256=digest(frozen), cohort_sha256=digest(cohort))
     value = select_survivor(frozen, cohort, results, evidence_root=tmp_path)
     assert value["survivor_id"] == "child"
+
+
+def test_relative_weight_overflow_preserves_scores_and_confidence(tmp_path):
+    from copy import deepcopy
+
+    frozen, cohort, results = comparison(tmp_path)
+    frozen['profile']['tasks']['second'] = deepcopy(frozen['profile']['tasks']['task'])
+    cohort['layouts']['second'] = [digest(['second', case]) for case in cohort['layouts']['task']]
+    for result in results:
+        result['episodes'] += [dict(row, task='second', layout_sha256=digest(['second', row['layout_sha256']]))
+                               for row in result['episodes']]
+    decisions = []
+    for weight in (1., 1e308):
+        for spec in frozen['profile']['tasks'].values():
+            spec['weight'] = weight
+        cohort['comparison_sha256'] = digest(frozen)
+        for result in results:
+            result.update(comparison_sha256=digest(frozen), cohort_sha256=digest(cohort))
+        value = select_survivor(frozen, cohort, results, evidence_root=tmp_path)
+        assert value['survivor_id'] == 'child'
+        decisions.append(value)
+    assert decisions[0]['metrics'] == decisions[1]['metrics']
+    assert decisions[0]['rejected'] == decisions[1]['rejected']

@@ -74,8 +74,6 @@ class MultiFidelityEvaluator(ScheduledEvaluator):
                 low, high = bounds
                 if spec["weight"] <= 0 or low >= high or not math.isfinite(high - low):
                     raise ValueError("Screening weights and score ranges must be positive")
-            if not math.isfinite(sum(spec["weight"] for spec in ranking_profile.values())):
-                raise ValueError("Screening total weight must be finite")
         self.survivor_limit = survivor_limit
         self.ranking_profile = ({task: dict(weight=spec["weight"], score_range=list(spec["score_range"]))
                                  for task, spec in ranking_profile.items()} if ranking_profile is not None else None)
@@ -130,9 +128,10 @@ class MultiFidelityEvaluator(ScheduledEvaluator):
             if not scores:
                 raise ValueError("Screening ranking requires a complete task panel")
             per_task[task] = float(mean((score - low) / (high - low) for score in scores))
-        total = sum(spec["weight"] for spec in self.ranking_profile.values())
-        score = math.fsum(per_task[task] * (spec["weight"] / total)
-                         for task, spec in self.ranking_profile.items())
+        largest = max(spec["weight"] for spec in self.ranking_profile.values())
+        weights = {task: spec["weight"] / largest for task, spec in self.ranking_profile.items()}
+        total = math.fsum(weights.values())
+        score = math.fsum(per_task[task] * (weight / total) for task, weight in weights.items())
         return dict(per_task=per_task, score=score)
 
     def screen_pool(self, parent, candidates, output):

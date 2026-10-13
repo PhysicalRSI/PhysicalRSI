@@ -91,7 +91,6 @@ def validate_profile(profile):
             identifier(measurement)
             if _number(limit) < 0:
                 raise ValueError("Cost limits must be nonnegative")
-    _number(sum(spec["weight"] for spec in tasks.values()))
     if not 0 <= _number(profile["minimum_gain"]) <= 1:
         raise ValueError("Invalid normalized improvement margin")
     if not 0 <= _number(profile["tie_tolerance"]) < 1:
@@ -201,6 +200,9 @@ def select_survivor(
     # order for arithmetic and rejection lists before and after persistence.
     tasks = {name: comparison["profile"]["tasks"][name]
              for name in sorted(comparison["profile"]["tasks"])}
+    largest = max(spec["weight"] for spec in tasks.values())
+    weights = {task: spec["weight"] / largest for task, spec in tasks.items()}
+    total_weight = math.fsum(weights.values())
     layouts = cohort["layouts"]
     if set(layouts) != set(tasks):
         raise ValueError("Cohort task coverage differs")
@@ -288,9 +290,8 @@ def select_survivor(
                     raise ValueError("Measured cost must be nonnegative")
                 values.append(value)
         per_task = {task: float(mean(values)) for task, values in scores.items()}
-        total_weight = sum(spec["weight"] for spec in tasks.values())
         metrics[name] = dict(
-            normalized_score=math.fsum(per_task[t] * (tasks[t]["weight"] / total_weight)
+            normalized_score=math.fsum(per_task[t] * (weights[t] / total_weight)
                                        for t in tasks),
             per_task=per_task,
             success_rate={t: sum(v) / len(v) for t, v in success.items()},
@@ -313,8 +314,8 @@ def select_survivor(
         # Independent paired case differences lie in [-1, 1]. Weighted
         # Hoeffding plus a union bound covers the preregistered total number of
         # candidate comparisons, including adaptive rounds with fresh cases.
-        variance_bound = sum((spec["weight"] / total_weight) ** 2 / spec["episodes"]
-                             for spec in tasks.values())
+        variance_bound = math.fsum((weights[task] / total_weight) ** 2 / spec["episodes"]
+                                   for task, spec in tasks.items())
         radius = math.sqrt(2 * math.log(statistics["max_comparisons"] / statistics["alpha"]) * variance_bound)
     for name, metric in metrics.items():
         if name == parent:

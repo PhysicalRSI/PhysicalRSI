@@ -464,7 +464,7 @@ def test_independent_identical_rollouts_survive_deduplication_but_copies_do_not(
     assert all(row['reason'] == 'duplicate_observation' for row in fit['excluded'])
 
 
-@pytest.mark.parametrize('weight', [1., 5e-324, 5e307])
+@pytest.mark.parametrize('weight', [1., 5e-324, 5e307, 1e308])
 def test_relative_weight_scale_preserves_feedback_contrast(tmp_path, weight):
     observed = candidate(tmp_path / 'observed', (5., 3.))
     history = rows(observed, values(tmp_path / 'history', observed))

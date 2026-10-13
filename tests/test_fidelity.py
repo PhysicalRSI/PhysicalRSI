@@ -162,9 +162,11 @@ def ranking_profile():
     return {t: dict(weight=1, score_range=[0, 1]) for t in ('axis', 'vector')}
 
 
+@pytest.mark.parametrize('weight', [1., 1e308])
 @pytest.mark.parametrize('screen_incumbent', [False, True])
-def test_ranked_survivors_retain_incumbent_and_all_branch_evidence(tmp_path, monkeypatch, screen_incumbent):
-    options = dict(survivor_limit=2, ranking_profile=ranking_profile(), minimum_success_rate=0.)
+def test_ranked_survivors_retain_incumbent_and_all_branch_evidence(tmp_path, monkeypatch, screen_incumbent, weight):
+    profile = {t: dict(weight=weight, score_range=[0, 1]) for t in ('axis', 'vector')}
+    options = dict(survivor_limit=2, ranking_profile=profile, minimum_success_rate=0.)
     bounded_screening(monkeypatch, options)
     campaign, initial, suite, quota = setup(tmp_path, screen_incumbent=screen_incumbent, max_trials=48)
     result = campaign.run(initial)
@@ -214,7 +216,7 @@ def test_ranked_survivors_retain_incumbent_and_all_branch_evidence(tmp_path, mon
     dict(survivor_limit=1, ranking_profile={t: dict(weight=0, score_range=[0, 1]) for t in ('axis', 'vector')}),
     dict(survivor_limit=1, ranking_profile={t: dict(weight=1, score_range=[1, 1]) for t in ('axis', 'vector')}),
     dict(survivor_limit=1, ranking_profile={t: dict(weight=1, score_range=[-1e308, 1e308]) for t in ('axis', 'vector')}),
-    dict(survivor_limit=1, ranking_profile={t: dict(weight=1e308, score_range=[0, 1]) for t in ('axis', 'vector')}),
+    dict(survivor_limit=1, ranking_profile={t: dict(weight=float('inf'), score_range=[0, 1]) for t in ('axis', 'vector')}),
 ])
 def test_invalid_ranking_policy_is_rejected_before_trials(tmp_path, monkeypatch, options):
     bounded_screening(monkeypatch, options)

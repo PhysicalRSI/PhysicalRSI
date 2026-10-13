@@ -54,7 +54,6 @@ class AdaptiveParameterEvolver:
             raise ValueError('Full covariance requires a representable positive minimum variance')
         self.archive,self.space,self.objective=archive,space,objective
         self.weights=deepcopy(task_weights)
-        finite(sum(self.weights.values()))
         self.settings=dict(population=population,seed=seed,elite_fraction=elite_fraction,
             exploration_fraction=exploration_fraction,minimum_scale=minimum_scale,strategy=strategy,
             stop_on_success=stop_on_success,minimum_observations=minimum_observations,covariance=covariance)
@@ -133,8 +132,10 @@ class AdaptiveParameterEvolver:
             # archive iteration order differ; rounding must not create a signal.
             means={case:float(mean(scores)) for case,scores in cases.items()}
             per_task={t:float(mean(means[c] for c,p in panel.items() if p['task']==t)) for t in self.weights}
-            total_weight=sum(self.weights.values())
-            score=math.fsum(per_task[t]*(w/total_weight) for t,w in self.weights.items())
+            largest=max(self.weights.values())
+            weights={t:w/largest for t,w in self.weights.items()}
+            total_weight=math.fsum(weights.values())
+            score=math.fsum(per_task[t]*(w/total_weight) for t,w in weights.items())
             ranked.append(dict(values=list(values),score=score,per_task=per_task,case_scores=means))
         ranked.sort(key=lambda r:(-r['score'],r['values']))
         score_contrast=bool(ranked) and ranked[0]['score']>ranked[-1]['score']
