@@ -60,9 +60,10 @@ class ResearchMemory:
             self.read(parent)
         if not isinstance(lessons, dict) or not lessons:
             raise ValueError("Nonempty lesson mapping required")
+        verified = {}
         for name, lesson in lessons.items():
             identifier(name)
-            _lesson(lesson)
+            _lesson(lesson, verified=verified)
         value = dict(schema="physicalrsi.research-memory/v1", parent=parent,
                      lessons=deepcopy(lessons), qualification=None)
         revision = digest(value)

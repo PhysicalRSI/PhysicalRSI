@@ -828,6 +828,10 @@ Each `ResearchMemory.read` hashes a shared evidence path once across all lessons
 and checks every declared digest against that result. The cache belongs only to
 that call: later reads recheck the files, and conflicting digest declarations
 are rejected. This reduces repeated evidence I/O without a persistent cache.
+Snapshot writes likewise verify each successor evidence path once. Parent
+verification remains separate, and repeated writes recheck the evidence before
+acknowledging an existing revision. Changed, missing or conflicting evidence
+cannot publish a successor or modify an existing snapshot.
 A local CPFS benchmark with 32 lessons sharing two 1 MiB files measured six
 alternating old/new read pairs. Median read time decreased from 242 ms to 10 ms,
 with 64 versus two file hashes and identical returned snapshots. This used

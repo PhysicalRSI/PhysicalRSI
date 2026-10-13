@@ -173,3 +173,35 @@ def test_shared_evidence_conflicting_digests_cannot_reuse_a_previous_check(tmp_p
     atomic_json(memory.root / (changed_revision + '.json'), value)
     with pytest.raises(ValueError, match='evidence changed'):
         memory.read(changed_revision)
+
+
+@pytest.mark.parametrize('damage', ['changed', 'missing', 'conflicting'])
+def test_memory_successor_checks_shared_evidence_once_and_never_caches_across_writes(tmp_path, monkeypatch, damage):
+    from PhysicalRSI_core.self_harness import research_memory as module
+    _, _, _, memory, parent, _, evidence = fixture(tmp_path)
+    lesson = memory.read(parent)['lessons']['recovery']
+    lessons = {'lesson-' + str(i): deepcopy(lesson) for i in range(32)}
+    original = module.file_digest
+    calls = []
+
+    def counted(path):
+        calls.append(str(path))
+        return original(path)
+
+    monkeypatch.setattr(module, 'file_digest', counted)
+    revision = memory.write(lessons, parent=parent)
+    # Parent verification and successor validation are separate observations.
+    assert calls == [str(evidence)] * 2
+    calls.clear()
+    assert memory.write(lessons, parent=parent) == revision
+    assert calls == [str(evidence)] * 2
+    saved = {p.name: p.read_bytes() for p in memory.root.glob('*.json')}
+    if damage == 'changed':
+        evidence.write_text('changed evidence')
+    elif damage == 'missing':
+        evidence.unlink()
+    else:
+        lessons['lesson-31']['evidence'][str(evidence)] = '0' * 64
+    with pytest.raises(ValueError, match='evidence changed'):
+        memory.write(lessons, parent=parent)
+    assert {p.name: p.read_bytes() for p in memory.root.glob('*.json')} == saved
