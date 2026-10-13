@@ -1092,7 +1092,9 @@ cannot rewrite the provenance being published. Normal submission and recovery
 after a lost reply both retain the values recorded in the durable job receipts.
 Resuming a completed training workspace checks its submission, terminal and
 collection receipts against the checkpoint's owned provenance without calling
-the provider. Missing or conflicting receipts stop acknowledgement; they never
+the provider. These comparisons use canonical JSON identities, so boolean/numeric
+substitutions in quiescence or measured-cost fields are rejected. Missing or
+conflicting receipts stop acknowledgement; they never
 trigger retraining or silently overwrite the conflicting evidence. Reading or
 binding an owned checkpoint separately still works after source workspace loss.
 Reported costs must fit the frozen budget; providers enforce actual process/GPU

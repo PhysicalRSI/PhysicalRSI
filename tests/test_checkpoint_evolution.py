@@ -461,3 +461,34 @@ def test_completed_training_resume_checks_local_receipts(tmp_path, monkeypatch, 
     atomic_json(path, saved)
     assert coordinator.advance(request, directory) == revision
     assert len(provider.scheduler.status()['jobs']) == 1
+
+
+@pytest.mark.parametrize('receipt', ['terminal.json', 'collection.json'])
+def test_completed_training_resume_rejects_json_type_changes(tmp_path, monkeypatch, receipt):
+    _, _, _, _, provider, coordinator, directory, request = pending(tmp_path)
+    provider.scheduler.work_once(provider.handler)
+    revision = coordinator.advance(request, directory)
+    path = directory / receipt
+    original = read_json(path)
+    changed = deepcopy(original)
+    if receipt == 'terminal.json':
+        assert changed['quiescent'] is True
+        changed['quiescent'] = 1
+    else:
+        assert changed['costs']['updates'] == 1
+        changed['costs']['updates'] = True
+    assert changed == original and digest(changed) != digest(original)
+    atomic_json(path, changed)
+    before = path.read_bytes()
+
+    def unexpected(*args):
+        pytest.fail('Receipt verification must not invoke a training provider')
+
+    for name in ('submit', 'recover_submission', 'poll', 'collect'):
+        monkeypatch.setattr(provider, name, unexpected)
+    with pytest.raises(ValueError, match='Published training receipt'):
+        coordinator.advance(request, directory)
+    assert path.read_bytes() == before
+    atomic_json(path, original)
+    assert coordinator.advance(request, directory) == revision
+    assert len(provider.scheduler.status()['jobs']) == 1

@@ -111,7 +111,7 @@ class TrainingCoordinator:
                 result = read_json(completed)
                 record = self.store.read(result["checkpoint_revision"])
                 training = record["metadata"]["training"]
-                if result["request_sha256"] != sha or training is None or training["request"] != request:
+                if result["request_sha256"] != sha or training is None or digest(training["request"]) != sha:
                     raise ValueError("Published checkpoint differs from the training request")
                 # Completion is an acknowledgement of this workspace's exact
                 # receipts, not permission to ignore conflicting local evidence.
@@ -123,7 +123,7 @@ class TrainingCoordinator:
                 }
                 for name, expected in receipts.items():
                     path = output / name
-                    if not path.is_file() or read_json(path) != expected:
+                    if not path.is_file() or digest(read_json(path)) != digest(expected):
                         raise ValueError("Published training receipt changed or is missing: " + name)
                 return result["checkpoint_revision"]
             receipt = output / "submission.json"
