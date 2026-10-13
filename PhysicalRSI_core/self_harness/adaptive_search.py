@@ -125,6 +125,10 @@ class AdaptiveParameterEvolver:
             key=tuple(row['values'])
             grouped.setdefault(key,{}).setdefault(row['case_sha256'],[]).append(row['score'])
         ranked,incomplete=[],[]
+        largest=max(self.weights.values())
+        weights={t:w/largest for t,w in self.weights.items()}
+        total_weight=math.fsum(weights.values())
+        weights={t:w/total_weight for t,w in weights.items()}
         for values,cases in grouped.items():
             if set(cases)!=set(panel) or any(any(s is None for s in scores) for scores in cases.values()):
                 incomplete.append(dict(values=list(values),reason='incomplete_development_panel'));continue
@@ -132,10 +136,7 @@ class AdaptiveParameterEvolver:
             # archive iteration order differ; rounding must not create a signal.
             means={case:float(mean(scores)) for case,scores in cases.items()}
             per_task={t:float(mean(means[c] for c,p in panel.items() if p['task']==t)) for t in self.weights}
-            largest=max(self.weights.values())
-            weights={t:w/largest for t,w in self.weights.items()}
-            total_weight=math.fsum(weights.values())
-            score=math.fsum(per_task[t]*(w/total_weight) for t,w in weights.items())
+            score=math.fsum(per_task[t]*w for t,w in weights.items())
             ranked.append(dict(values=list(values),score=score,per_task=per_task,case_scores=means))
         ranked.sort(key=lambda r:(-r['score'],r['values']))
         score_contrast=bool(ranked) and ranked[0]['score']>ranked[-1]['score']
@@ -202,8 +203,9 @@ class AdaptiveParameterEvolver:
         self._stable()
         evidence[str(output/'adaptive-fit.json')]=file_digest(output/'adaptive-fit.json')
         children=[]
+        report_sha=digest(report)
         for index,proposal in enumerate(proposals):
-            name='adaptive-'+digest(report)[:12]+'-'+str(index)
+            name='adaptive-'+report_sha[:12]+'-'+str(index)
             candidate,changes=self.space.candidate(parent,inspected,proposal['values'],output=output/name,name=name)
             children.append(dict(candidate,parent_sha256=verify_harness(parent),method='development-adaptive-parameter-search',
                 changes=changes,environment=dict(scope=search['view']['scope']),evidence=deepcopy(evidence),
