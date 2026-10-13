@@ -915,6 +915,12 @@ If the provisional winner violates a floor, selection considers the remaining
 eligible candidates; it does not deploy the violating winner. The view and
 effective floors are bound into round identities and the selection receipt.
 Lineage CAS still rejects commits against a stale parent.
+The four-capability tree regression also checks rollback from three branches to
+two: all four historical score floors remain at 1.0, the frozen pre-rollback view
+remains unchanged, and the post-rollback selector rejects the old comparison's
+parent binding. Reading these views and rejecting stale evidence adds no Trials
+or quota reservations. Rollback therefore does not erase measured capabilities
+or turn previously collected validation into a fresh comparison.
 
 These floors are empirical scores, not population confidence bounds. Fresh
 paired cases, optional statistical constraints and complete coverage remain
@@ -1031,6 +1037,10 @@ Known queued/running jobs raise `TrainingPending`; the caller resumes the same
 proposal after observing progress. Unknown jobs require reconciliation.
 Submission and planner receipts prevent blind repetition. Completed checkpoints
 own the training request, job handle, terminal status, output hashes and costs.
+The coordinator owns deep snapshots of requests and provider replies before the
+next callback. Later provider mutations of nested handle/status/result objects
+cannot rewrite the provenance being published. Normal submission and recovery
+after a lost reply both retain the values recorded in the durable job receipts.
 Reported costs must fit the frozen budget; providers enforce actual process/GPU
 limits and cancellation. Core does not infer spare cluster capacity or provision
 instances. A failed, quiescent training job produces no candidate. Training loss

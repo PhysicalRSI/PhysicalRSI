@@ -64,8 +64,21 @@ def test_tree_learning_preserves_old_capabilities_and_rejects_weighted_forgettin
     assert restarted.run(again) == research and restarted.report_test(again) == final
     assert not observed.resets
     # The selected tree uses normal lineage rollback, including all branches.
+    limits = {task: 0. for task in final['metrics']}
+    prior = RetentionSelector(state=campaign.state, parent_revision=research['current']['revision'],
+                              maximum_regression=limits)
+    assert prior.view['high_water'] == {task: 1. for task in limits}
     restored = campaign.state.rollback(research["current"]["revision"],reason="tree rollback test")
     assert len(HarnessTree(restored["harness"]).body["nodes"]) == 2
+    retained = RetentionSelector(state=campaign.state, parent_revision=restored['revision'],
+                                 maximum_regression=limits)
+    assert retained.view['high_water'] == prior.view['high_water']
+    assert retained.view['records'] == [restored['revision'], *prior.view['records']]
+    assert prior.identity()['view'] == prior.view
+    with pytest.raises(ValueError, match='frozen parent'):
+        retained.select(comparison, cohort, results, evidence_root=directory)
+    assert campaign.state.resolve() == restored
+    assert quota.status()['reserved_trials'] == len(suite.resets) == 60
 
 
 def test_owned_tree_reconstructs_logical_files_after_source_loss(tmp_path):

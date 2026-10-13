@@ -85,6 +85,7 @@ class TrainingCoordinator:
 
     def advance(self, request, output):
         """Submit once, or perform read-only recovery/poll/collection on resume."""
+        request = deepcopy(request)
         self._stable()
         if (set(request) != {"schema", "store", "model", "provider", "kind", "budget", "parameters",
                             "parent_harness_sha256", "parent_checkpoint", "experience_revision", "binding_path"}
@@ -134,6 +135,9 @@ class TrainingCoordinator:
             else:
                 atomic_json(receipt, dict(state="started", request_sha256=sha))
                 handle = self.provider.submit(deepcopy(request), output)
+            # Providers may retain and update their own reply objects later.
+            # Published provenance must own the values observed at each boundary.
+            handle = deepcopy(handle)
             self._stable()
             if (not isinstance(handle, dict) or handle.get("request_sha256") != sha
                     or not isinstance(handle.get("job_id"), str) or not handle["job_id"]):
@@ -141,7 +145,7 @@ class TrainingCoordinator:
             atomic_json(receipt, dict(state="completed", request_sha256=sha,
                                      handle=handle, handle_sha256=digest(handle)))
             status_path = output / "terminal.json"
-            status = read_json(status_path) if status_path.exists() else self.provider.poll(deepcopy(handle))
+            status = deepcopy(read_json(status_path) if status_path.exists() else self.provider.poll(deepcopy(handle)))
             self._stable()
             if (status.get("request_sha256") != sha or status.get("job_id") != handle["job_id"]
                     or status.get("state") not in {"queued", "running", "completed", "failed", "unknown"}):
@@ -155,7 +159,7 @@ class TrainingCoordinator:
                 raise TrainingRejected("Training job failed and is quiescent: " + handle["job_id"])
             # Collection is read-only, so an interrupted collection can safely
             # be repeated against this same completed, quiescent job.
-            result = self.provider.collect(deepcopy(handle))
+            result = deepcopy(self.provider.collect(deepcopy(handle)))
             self._stable()
             if (set(result) != {"root", "entrypoint", "files", "costs", "metrics", "role", "request_sha256", "job_id"}
                     or result["request_sha256"] != sha or result["job_id"] != handle["job_id"]

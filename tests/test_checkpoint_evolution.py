@@ -284,3 +284,50 @@ def test_checkpoint_permission_drift_is_rejected_before_use_or_resume(tmp_path, 
         store.binding(child)
     with pytest.raises(ValueError, match='file mode'):
         store.install(initial, revision, tmp_path / 'copy', candidate_id='copy')
+
+
+@pytest.mark.parametrize('recover', [False, True])
+def test_training_provenance_owns_provider_replies_across_callbacks(tmp_path, recover):
+    _, _, _, _, original, _, _, request = pending(tmp_path)
+    original.scheduler.work_once(original.handler)
+
+    class MutableReplies(Provider):
+        submissions = 0
+
+        def submit(self, request, output):
+            self.submissions += 1
+            self.handle = dict(super().submit(request, output), notes=dict(stage='submitted'))
+            if recover:
+                raise RuntimeError('lost submission reply')
+            return self.handle
+
+        def recover_submission(self, request, output):
+            return self.handle
+
+        def poll(self, handle):
+            self.status = super().poll(handle)
+            self.handle['notes']['stage'] = 'later provider progress'
+            return self.status
+
+        def collect(self, handle):
+            self.status['notes']['stage'] = 'later collection progress'
+            return super().collect(handle)
+
+    provider = MutableReplies(tmp_path)
+    coordinator = TrainingCoordinator(store=CheckpointStore(tmp_path / 'models'), provider=provider, backend=Backend())
+    output = tmp_path / 'mutable-replies'
+    if recover:
+        with pytest.raises(RuntimeError, match='lost submission reply'):
+            coordinator.advance(request, output)
+    revision = coordinator.advance(request, output)
+    training = coordinator.store.read(revision)['metadata']['training']
+    submission = read_json(output / 'submission.json')
+    terminal = read_json(output / 'terminal.json')
+    assert training['handle'] == submission['handle']
+    assert training['status'] == terminal
+    assert training['handle']['notes']['stage'] == 'submitted'
+    assert training['status']['notes']['stage'] == 'submitted'
+    assert provider.handle['notes']['stage'] == 'later provider progress'
+    assert provider.status['notes']['stage'] == 'later collection progress'
+    assert coordinator.advance(request, output) == revision
+    assert provider.submissions == 1 and len(provider.scheduler.status()['jobs']) == 1
