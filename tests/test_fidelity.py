@@ -271,3 +271,21 @@ def test_misleading_or_missing_ranking_measurements_cannot_promote(tmp_path, mon
         assert result['current']['harness']['id'] == initial['id']
     assert campaign.state.resolve()['harness']['id'] == initial['id']
     assert JobScheduler(tmp_path / 'scheduler', capacities={'cpu': 2}).status()['used'] == {'cpu': 0}
+
+
+@pytest.mark.parametrize('score,repeats', [(.1, 11), (.9, 3)])
+@pytest.mark.parametrize('repeated_task', ['axis', 'vector'])
+def test_screening_repeated_constant_feedback_keeps_the_same_task_priority(score, repeats, repeated_task):
+    from types import SimpleNamespace
+    evaluator = object.__new__(MultiFidelityEvaluator)
+    evaluator.screening = SimpleNamespace(score_measurement='quality')
+    evaluator.ranking_profile = {'axis': dict(weight=3, score_range=[0, 1]),
+                                 'vector': dict(weight=1, score_range=[0, 1])}
+    other = 'vector' if repeated_task == 'axis' else 'axis'
+    repeated = dict(task=repeated_task, outcome='success', measurements=dict(quality=score))
+    fixed = dict(task=other, outcome='success', measurements=dict(quality=.2))
+    expected = evaluator._ranking_scores([repeated, fixed])
+    assert expected['per_task'][repeated_task] == score
+    actual = evaluator._ranking_scores([repeated] * repeats + [fixed])
+    assert actual == expected
+    assert evaluator._ranking_scores([fixed] + [repeated] * repeats) == expected

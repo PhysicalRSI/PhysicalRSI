@@ -7,6 +7,7 @@ validation. They are never substituted for promotion scores or final tests.
 from copy import deepcopy
 import math
 from pathlib import Path
+from statistics import mean
 
 from ..contracts import ReconciliationRequired
 from ..infra.storage import file_digest, read_json
@@ -128,7 +129,7 @@ class MultiFidelityEvaluator(ScheduledEvaluator):
                 for row in episodes if row["task"] == task]
             if not scores:
                 raise ValueError("Screening ranking requires a complete task panel")
-            per_task[task] = math.fsum((score - low) / (high - low) / len(scores) for score in scores)
+            per_task[task] = float(mean((score - low) / (high - low) for score in scores))
         total = sum(spec["weight"] for spec in self.ranking_profile.values())
         score = math.fsum(per_task[task] * (spec["weight"] / total)
                          for task, spec in self.ranking_profile.items())
