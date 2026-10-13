@@ -143,3 +143,52 @@ def test_phase_timings_separate_execution_verification_evidence_and_interrupted_
             run(runtime, **options)
     assert receipt['timing'] == dict(schema='physicalrsi.trial-timing/v1', phase_seconds=expected)
     assert receipt['elapsed_seconds'] == sum(expected.values())
+
+
+def test_execution_identity_survives_reopening_and_copying_evidence(tmp_path):
+    import shutil
+    from PhysicalRSI_core.trials import Evaluation
+    runtime = ExperimentRuntime(tmp_path / 'original')
+    receipt = run(runtime)
+    token = receipt['execution_id']
+    assert len(token) == 32 and all(c in '0123456789abcdef' for c in token)
+    assert run(runtime) == receipt
+    shutil.copytree(runtime.root, tmp_path / 'archived')
+    copied = ExperimentRuntime(tmp_path / 'archived')
+    assert Evaluation.read(copied, 'trial').to_dict()['receipt'] == receipt
+    # Historical receipts remain readable and receive no invented identity.
+    legacy = dict(receipt)
+    legacy.pop('execution_id')
+    from PhysicalRSI_core.infra.storage import atomic_json
+    atomic_json(copied.root / 'trial/receipt.json', legacy)
+    assert copied.read('trial') == legacy
+
+
+def test_execution_identity_is_durable_before_interrupted_reset(tmp_path):
+    seen = []
+
+    class Interrupted(CounterEnvironment):
+        def reset(self, case, context):
+            seen.append(json.loads((tmp_path / 'trial/receipt.json').read_text())['execution_id'])
+            raise RuntimeError('reset interrupted')
+
+    runtime = ExperimentRuntime(tmp_path)
+    with pytest.raises(RuntimeError, match='reset interrupted'):
+        run(runtime, environment=Interrupted())
+    receipt = json.loads((tmp_path / 'trial/receipt.json').read_text())
+    assert seen == [receipt['execution_id']]
+    with pytest.raises(ReconciliationRequired):
+        run(runtime, environment=Interrupted())
+    assert json.loads((tmp_path / 'trial/receipt.json').read_text()) == receipt
+    assert len(seen) == 1
+
+
+@pytest.mark.parametrize('token', [None, 1, '', 'a'*31, 'A'*32, 'g'*32])
+def test_malformed_execution_identity_is_rejected(tmp_path, token):
+    from PhysicalRSI_core.infra.storage import atomic_json
+    runtime = ExperimentRuntime(tmp_path)
+    receipt = run(runtime)
+    receipt['execution_id'] = token
+    atomic_json(tmp_path / 'trial/receipt.json', receipt)
+    with pytest.raises(ValueError, match='execution identity'):
+        runtime.read('trial')

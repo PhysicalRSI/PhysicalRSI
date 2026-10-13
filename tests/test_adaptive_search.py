@@ -445,3 +445,20 @@ def test_repeated_feedback_mean_is_independent_of_archive_order(tmp_path):
     assert fits[0]['ranked'] == fits[1]['ranked']
     assert fits[0]['elite'] == fits[1]['elite']
     assert fits[0]['proposals'] == fits[1]['proposals']
+
+
+def test_independent_identical_rollouts_survive_deduplication_but_copies_do_not(tmp_path, monkeypatch):
+    from PhysicalRSI_core import contracts, experiments
+    monkeypatch.setattr(experiments, 'monotonic', lambda: 1000.)
+    monkeypatch.setattr(contracts, 'monotonic', lambda: 1000.)
+    observed = candidate(tmp_path / 'observed', (5., 3.))
+    first = values(tmp_path / 'first-execution', observed)
+    second = values(tmp_path / 'second-execution', observed)
+    assert [v['trial_sha256'] for v in first] == [v['trial_sha256'] for v in second]
+    history = rows(observed, first) + rows(observed, second) + rows(observed, deepcopy(first))
+    evolver, args = build(tmp_path / 'study', history=history, objective=PanelObjective(default=.1))
+    evolver.propose_from_archive(*args)
+    fit = read_json(args[-1] / 'adaptive-fit.json')
+    assert len(fit['samples']) == 6  # Current panel plus two genuinely executed panels.
+    assert len(fit['excluded']) == 2  # Only the copied first panel is redundant.
+    assert all(row['reason'] == 'duplicate_observation' for row in fit['excluded'])

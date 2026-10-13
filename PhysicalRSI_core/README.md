@@ -66,6 +66,14 @@ receipts with retained execution evidence also block execution. See
 [explicit replacement](../docs/core-development.md#explicit-replacement-after-an-interrupted-reset)
 for the API, owned evidence, budget accounting and current recovery boundary.
 
+New Trial receipts carry a random 128-bit `execution_id`, persisted before reset.
+The local run ID still identifies a plan within one runtime root; the execution
+ID distinguishes independent attempts with otherwise identical evidence and
+clock readings. Reopening or copying a receipt preserves it, while an explicitly
+authorized replacement gets a new ID. Historical receipts remain readable without
+invented IDs; ambiguous historical executions cannot be disambiguated retroactively.
+The token is provenance metadata, not permission to rerun an existing Trial.
+
 New terminal Trial receipts include `timing.phase_seconds` for preparation,
 reset, rollout, verification, finalization and interrupted cleanup. These use the
 runtime's monotonic clock and sum to `elapsed_seconds`. Reset/rollout include their

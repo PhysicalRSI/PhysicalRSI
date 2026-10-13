@@ -5,6 +5,7 @@ an adapter must honor Context.check() and bound its own device/network calls.
 Device ownership and trial receipts survive interruption without automatic retry.
 """
 import json
+import secrets
 from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import asdict, dataclass
@@ -198,6 +199,11 @@ class ExperimentRuntime:
         folder = self.root / identifier(run_id)
         reader = evidence.EvidenceReader(folder)
         receipt = reader.document("receipt.json")
+        if "execution_id" in receipt:
+            execution_id = receipt["execution_id"]
+            if (not isinstance(execution_id, str) or len(execution_id) != 32
+                    or any(c not in "0123456789abcdef" for c in execution_id)):
+                raise ValueError("Invalid Trial execution identity")
         if receipt["state"] != "completed":
             raise ReconciliationRequired(f"Inspect interrupted experiment: {folder}")
         specification = reader.document("experiment.json", receipt["evidence"].get("experiment.json"))
@@ -362,7 +368,11 @@ class ExperimentRuntime:
         if claim:
             atomic_json(folder / "lease.json", claim)
             evidence_names.update({"lease.json", "quiescence.json"})
+        # A local run ID identifies a plan within one runtime root. Independent
+        # executions may otherwise have byte-identical receipts (including time).
+        # Mint once before effects; read/resume/archive copies retain this token.
         receipt = dict(schema="physicalrsi.experiment-receipt/v2", id=run_id,
+                       execution_id=secrets.token_hex(16),
                        state="started", experiment_sha256=frozen, scope=specification["scope"],
                        qualification=None, binding=specification["binding"],
                        system2=specification["system2"], execution_phase='admitted')

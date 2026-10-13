@@ -80,6 +80,7 @@ def test_replacement_runs_original_cross_task_campaign_and_restarts_without_effe
     assert len(suite.resets) == quota.status()['reserved_trials'] == 15
     assert {name: file_digest(failed / name) for name in before} == before
     value = Evaluation.read(ExperimentRuntime(failed.parent), replacement['run_id']).to_dict()
+    assert value['receipt']['execution_id'] != read_json(failed / 'receipt.json')['execution_id']
     assert value['recovery']['original_id'] == failed.name
     assert value['recovery']['index'] == 1
     assert value['trial']['case'] == read_json(failed / 'experiment.json')['case']
