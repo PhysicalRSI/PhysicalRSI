@@ -82,6 +82,22 @@ hashing. Timing starts after the initial receipt is written and ends before the
 terminal receipt is committed and audited. Historical receipts may omit timing;
 these measurements diagnose execution cost and do not change task scores.
 
+Inspect completed executions without rerunning them:
+
+```python
+from PhysicalRSI_core.diagnostics import profile_trials
+
+profile = profile_trials([(runtime, "trial-1"), (another_runtime, "trial-2")])
+print(profile["summary"]["phase_seconds"])
+```
+
+The read-only report audits each `Evaluation`, binds Trial and receipt hashes,
+and reports aggregate and per-task elapsed time plus phase coverage. Duplicate
+execution evidence is rejected. Legacy missing phase timings remain explicit.
+Totals sum worker time, not campaign wall time; concurrent Trials can overlap,
+and queue waits and later archival work are excluded. Interrupted Trials still
+require their separate reconciliation workflow.
+
 Deadlines are cooperative. Adapters must bound device calls and honor `Context.check()`. Physical declarations require named resources and an explicitly shared `infra.devices.DeviceRegistry`. Its leases coordinate cooperating processes on one local controller host, retain uncertain ownership across interruption, and require confirmed quiescence before release. They do not stop hardware or fence another controller host. The runtime verifies local evidence and identity consistency; it cannot guarantee sensor accuracy, verifier accuracy, physical reproducibility or process isolation.
 
 ## Self-Harness

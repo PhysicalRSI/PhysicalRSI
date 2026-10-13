@@ -386,3 +386,74 @@ def test_v2_skill_read_requires_its_checked_bundle_and_preserves_v1_reading(tmp_
     del legacy['bundle']
     old = library.skills.capture(legacy, sources, bind_modes=False)
     assert library.read(old)['metadata'] == legacy
+
+
+def test_withdrawing_one_skill_preserves_independent_skill_and_historical_memory(tmp_path, monkeypatch):
+    from PhysicalRSI_core.experiments import Budget, ExperimentRuntime
+    from PhysicalRSI_core.trials import Trial
+    from PhysicalRSI_core.self_harness.artifacts import verify_harness
+    from PhysicalRSI_demos.rollout_evolution import Verifier
+    from PhysicalRSI_demos.skill_transfer import SkillPolicy
+
+    resets = []
+    reset = Environment.reset
+
+    def observed(self, case, context):
+        resets.append((self.task, case))
+        return reset(self, case, context)
+
+    monkeypatch.setattr(Environment, 'reset', observed)
+
+    primary = tmp_path / 'primary'
+    _, initial, library, memory, engine, _, _, _, _, _ = prepare(primary, gain=2.)
+    _, _, source_library, _, _, _, _, source_experience, _, _ = prepare(tmp_path / 'independent', gain=.25)
+    source_record = source_library.experiences.read(source_experience)
+    source_files = source_library.experiences.folder(source_experience) / 'files'
+    imported = library.experiences.capture(source_record['metadata'],
+        {name: dict(path=str(source_files / name), sha256=sha) for name, sha in source_record['files'].items()})
+    conditions = dict(CONDITIONS, actuator_family='independent-linear')
+    independent = engine.compile(imported, name=LESSON, conditions=conditions,
+        required_checks=['inverse-transition'], output=tmp_path / 'independent-compilation')
+    # Start the ordinary transfer/withdrawal campaign with both skills pinned.
+    install = ExperienceCompiler.install
+
+    def install_both(self, skill_revision, *, memory, memory_revision, lesson_id):
+        revision = install(self, skill_revision, memory=memory, memory_revision=memory_revision, lesson_id=lesson_id)
+        if self.library.root == library.root and lesson_id == LESSON:
+            revision = install(self, independent, memory=memory, memory_revision=revision, lesson_id='independent-response')
+        return revision
+
+    monkeypatch.setattr(ExperienceCompiler, 'install', install_both)
+    result = run(primary, gain=2.)
+    before = memory.read(result['memory_revision'])
+    after = memory.read(result['suspended_memory_revision'])
+    assert after['parent'] == result['memory_revision']
+    assert before['lessons'][LESSON]['status'] == 'active'
+    assert after['lessons'][LESSON]['status'] == 'suspended'
+    assert after['lessons']['independent-response'] == before['lessons']['independent-response']
+    assert memory.retrieve(result['suspended_memory_revision'], conditions).keys() == {'independent-response'}
+    assert memory.retrieve(result['suspended_memory_revision'], CONDITIONS) == {}
+    # Rebinding under both memory revisions preserves the independent dynamics.
+    runtime = ExperimentRuntime(tmp_path / 'retention-trials')
+    for name, revision in [('historical', result['memory_revision']), ('current', result['suspended_memory_revision'])]:
+        operation = library.bind(memory=memory, memory_revision=revision, lesson_id='independent-response',
+                                 context=conditions, backend=VectorBackend())
+        policy = SkillPolicy('vector', verify_harness(initial), operation, independent, revision, [])
+        evaluation = runtime.evaluate(Trial(name, task='vector', case=dict(initial=[0., 0.], target=[7., -11.]),
+            scope='software', budget=Budget(1, 30)), environment=Environment('vector', .25, []),
+            policy=policy, verifier=Verifier()).to_dict()
+        assert evaluation['outcome'] == 'success'
+        assert evaluation['verdict']['measurements']['squared_error'] == 0.
+        dependencies = evaluation['receipt']['binding']['system1']['dependencies']
+        assert any(d['kind'] == 'skill' and d['revision'] == independent for d in dependencies)
+        assert any(d['kind'] == 'memory' and d['revision'] == revision for d in dependencies)
+    with pytest.raises(SkillUnavailable):
+        library.bind(memory=memory, memory_revision=result['suspended_memory_revision'], lesson_id=LESSON,
+                     context=CONDITIONS, backend=VectorBackend())
+    with pytest.raises(SkillUnavailable):
+        library.bind(memory=memory, memory_revision=result['suspended_memory_revision'], lesson_id='independent-response',
+                     context=CONDITIONS, backend=VectorBackend())
+    assert memory.read(result['memory_revision']) == before
+    assert len(resets) == 22
+    assert run(primary, gain=2.) == result
+    assert len(resets) == 22

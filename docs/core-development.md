@@ -813,6 +813,15 @@ snapshots remain unchanged. Suspension blocks bindings using the new snapshot;
 it does not silently mutate already pinned historical executions or stop a
 robot. Runtime withdrawal requires an explicit state transition or rollback.
 
+A multi-skill integration regression compiles independent response gains of 2
+and 0.25 into one library under distinct actuator-family conditions. With both
+lessons installed, a failed development Trial suspends the first skill while
+preserving the second lesson exactly. Fresh vector Trials using the independent
+skill succeed under both historical and current memory revisions; their receipts
+bind the corresponding skill and memory. Wrong-context bindings are rejected.
+The test executes 22 software Trials in total and reopening the completed campaign
+adds none. This checks retention and version isolation, not native transfer.
+
 The CPU acceptance example learns an inverse response from two scalar-axis
 rollouts, compiles a vector action program and installs its skill lesson. The
 target Self-Harness uses that same program for scalar and structured vector
