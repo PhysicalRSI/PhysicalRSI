@@ -67,10 +67,20 @@ def candidate(root, value, *, offset=0):
 
 
 def sample(harness, outcome='failure', *, case=1, split='development'):
-    trial = dict(task='unit-root', case=dict(number=case), scope='software',
+    # Synthetic bound specifications isolate the bracket arithmetic. Executed
+    # Trial coverage below and the CPU campaign test exercise real receipts.
+    trial = dict(id='unit-'+str(case), task='unit-root', case=dict(number=case), scope='software',
+        budget=dict(max_steps=1, seconds=30),
         system2=dict(split=split,candidate_id=harness['id'],candidate_sha256=verify_harness(harness)))
+    specification = {k: trial[k] for k in ('task', 'case', 'scope', 'budget', 'system2')}
+    specification['adapters'] = dict(environment='unit-environment', verifier='unit-verifier',
+                                     policy=dict(revision=verify_harness(harness)))
+    path = Path(harness['root']).parent / 'unit-observations' / harness['id'] / trial['id'] / 'experiment.json'
+    atomic_json(path, specification)
     return dict(trial=trial,trial_sha256=digest(trial),outcome=outcome,
-        verdict=dict(measurements=dict(residual=1 if outcome=='failure' else 0)),evidence={})
+        receipt=dict(experiment_sha256=digest(specification)),
+        verdict=dict(measurements=dict(residual=1 if outcome=='failure' else 0)),
+        evidence={str(path):file_digest(path)})
 
 
 def search(tmp_path, *, current=1, previous=(), direction='increase', upper=9):
@@ -178,3 +188,106 @@ def test_changed_provider_and_existing_candidate_are_not_reused(tmp_path):
     evolver.classifier.identity=lambda:dict(kind='different')
     with pytest.raises(ValueError,match='implementation changed'):
         evolver.resume_proposal_from_archive(*args)
+
+
+@pytest.mark.parametrize('difference', ['same', 'environment', 'verifier', 'budget', 'binding'])
+def test_executed_history_is_conditioned_before_classifying_failures(tmp_path, difference):
+    from PhysicalRSI_core.embodiment import Embodiment, Revision, System2Trial
+    from PhysicalRSI_core.experiments import Budget, ExperimentRuntime
+    from PhysicalRSI_core.trials import Trial
+    from PhysicalRSI_demos import parameter_refinement as demo
+
+    class CappedEnvironment(demo.Environment):
+        def identity(self):
+            return dict(super().identity(), iteration_cap=1)
+
+        def step(self, action, context):
+            return super().step(dict(iterations=min(action['iterations'], 1)), context)
+
+    class DifferentBinding(demo.Environment):
+        def describe(self):
+            return Embodiment('newton', '2', 'software', demo.OBSERVATION, demo.ACTION)
+
+    class StrictVerifier(demo.Verifier):
+        def identity(self):
+            return dict(super().identity(), tolerance=1e-18)
+
+        def verify(self, case, trace):
+            value = super().verify(case, trace)
+            value['outcome'] = 'success' if value['measurements']['residual'] < 1e-18 else 'failure'
+            return value
+
+    parent = candidate(tmp_path / 'parent', 1)
+    historical = candidate(tmp_path / 'history', 9 if difference in ('environment', 'verifier') else 5)
+
+    def execute(harness, *, old=False):
+        trial = Trial('old' if old else 'current', task='small-root', case=dict(initial=10., number=2.),
+            scope='software', budget=Budget(2 if old and difference == 'budget' else 1, 30),
+            system2=System2Trial(Revision('screening' if old else 'development', '1'),
+                harness['id'], verify_harness(harness), 'development'))
+        environment = CappedEnvironment if old and difference == 'environment' else (
+            DifferentBinding if old and difference == 'binding' else demo.Environment)
+        verifier = StrictVerifier if old and difference == 'verifier' else demo.Verifier
+        return ExperimentRuntime(tmp_path / 'trials').evaluate(trial,
+            environment=environment('small-root', []), policy=demo.Policy(harness), verifier=verifier()).to_dict()
+
+    current, history = execute(parent), execute(historical, old=True)
+    assert current['outcome'] == history['outcome'] == 'failure'
+
+    class GuardedFeedback(Feedback):
+        def classify(self, value):
+            assert difference == 'same' or value['trial_sha256'] != history['trial_sha256']
+            return super().classify(value)
+
+    archive = UnitArchive([dict(candidate=historical, evaluation=history, role='development_screening',
+                               archive_revision='executed', archive_evidence={})])
+    evolver = ScalarRefinementEvolver(archive=archive, classifier=GuardedFeedback(),
+        parameter=ScalarParameter('control', 'control.json', ('iterations',), 1, 9, precision=0))
+    args = (parent, [current], None, dict(view=dict(scope='software')), tmp_path / 'proposal')
+    children = evolver.propose_from_archive(*args)
+    fit = read_json(args[-1] / 'search-fit.json')
+    assert fit['proposed_value'] == (7 if difference == 'same' else 5)
+    assert len(fit['samples']) == (2 if difference == 'same' else 1)
+    if difference == 'same':
+        assert fit['excluded'] == []
+        assert fit['samples'][0]['measurement_context'] == fit['samples'][1]['measurement_context']
+    else:
+        assert len(fit['excluded']) == 1 and fit['excluded'][0]['reason'] == 'measurement_context_changed'
+        assert fit['excluded'][0]['measurement_context'] != fit['samples'][0]['measurement_context']
+    assert evolver.resume_proposal_from_archive(*args) == children
+
+
+def test_current_scalar_panel_cannot_mix_duplicate_cases(tmp_path):
+    evolver, args = search(tmp_path)
+    args[1].append(deepcopy(args[1][0]))
+    with pytest.raises(ValueError, match='duplicate cases'):
+        evolver.propose_from_archive(*args)
+    assert not (args[-1] / 'search-fit.json').exists()
+
+
+@pytest.mark.parametrize('damage', ['missing', 'bytes', 'receipt', 'trial'])
+def test_scalar_context_requires_bound_execution_conditions(tmp_path, damage):
+    evolver, args = search(tmp_path)
+    value = args[1][0]
+    if damage == 'missing':
+        value['evidence'] = {}
+    elif damage == 'bytes':
+        Path(next(iter(value['evidence']))).write_text('{}')
+    elif damage == 'receipt':
+        value['receipt']['experiment_sha256'] = '0' * 64
+    else:
+        value['trial']['budget']['max_steps'] = 2
+        value['trial_sha256'] = digest(value['trial'])
+    with pytest.raises(ValueError, match='specification|Experiment specification'):
+        evolver.propose_from_archive(*args)
+    assert not (args[-1] / 'parameter-candidate').exists()
+
+
+def test_scalar_identity_binds_shared_feedback_context(tmp_path, monkeypatch):
+    from PhysicalRSI_core.self_harness import parameter_search
+    evolver, args = search(tmp_path)
+    original = parameter_search.file_digest
+    monkeypatch.setattr(parameter_search, 'file_digest', lambda path: '0' * 64
+                        if Path(path).name == 'feedback_context.py' else original(path))
+    with pytest.raises(ValueError, match='implementation changed'):
+        evolver.propose_from_archive(*args)

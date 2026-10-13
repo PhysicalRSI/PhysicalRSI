@@ -4,9 +4,7 @@ Global exploration remains in every mixed population. No monotonicity or causal
 repair classifier is required. Scores guide proposals, never inheritance.
 """
 from copy import deepcopy
-from hashlib import sha256
 from itertools import chain
-import json
 import math
 from pathlib import Path
 from random import Random
@@ -14,6 +12,7 @@ from random import Random
 from ..infra.storage import digest, file_digest
 from .artifacts import verify_harness
 from .evaluation import freeze_json
+from .feedback_context import measurement_context
 from .search_space import ParameterSpace, finite
 
 
@@ -30,32 +29,6 @@ def _cholesky(covariance):
             else:
                 factor[i][j]=residual/factor[j][j]
     return factor
-
-
-def measurement_context(value):
-    """Pin measured dynamics, verifier, budget and contracts across fidelities.
-
-    Policy parameters vary within the declared harness space. Their closure is
-    checked separately; suite identity/admission attests policy construction.
-    """
-    paths=[p for p in value['evidence'] if Path(p).name=='experiment.json'
-           and Path(p).parent.name==value['trial']['id']]
-    if len(paths)!=1:
-        raise ValueError('Development evaluation requires one bound experiment specification')
-    raw=Path(paths[0]).read_bytes()
-    if sha256(raw).hexdigest()!=value['evidence'][paths[0]]:
-        raise ValueError('Development experiment specification changed')
-    spec=json.loads(raw)
-    if digest(spec)!=value['receipt']['experiment_sha256']:
-        raise ValueError('Experiment specification differs from its Trial receipt')
-    if any(spec[k]!=value['trial'][k] for k in ('task','case','scope','budget','system2')):
-        raise ValueError('Experiment specification differs from the attributed Trial')
-    adapters={k:v for k,v in spec['adapters'].items() if k!='policy'}
-    binding=deepcopy(spec.get('binding'))
-    if binding is not None:
-        binding['system1'].pop('revision',None)
-    return digest(dict(adapters=adapters,binding=binding,budget=spec['budget'],
-        artifact_contract=spec.get('artifact_contract'),policy_lifecycle=spec.get('policy_lifecycle')))
 
 
 class AdaptiveParameterEvolver:
@@ -90,7 +63,7 @@ class AdaptiveParameterEvolver:
         return dict(kind='development-adaptive-parameter-search/v1',archive=self.archive.identity(),
             space=self.space.identity(),objective=self.objective.identity(),task_weights=self.weights,
             settings=self.settings,implementation=file_digest(Path(__file__)),
-            dependencies={n:file_digest(Path(__file__).with_name(n+'.py')) for n in ('search_space','artifacts')})
+            dependencies={n:file_digest(Path(__file__).with_name(n+'.py')) for n in ('search_space','artifacts','feedback_context')})
 
     def _stable(self):
         if self.identity()!=self._identity:

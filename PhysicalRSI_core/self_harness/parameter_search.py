@@ -17,6 +17,7 @@ from ..infra.storage import canonical, digest, file_digest, relative_path
 from .artifacts import CLOSURE, harness_identity, verify_harness
 from .search_space import materialize
 from .evaluation import freeze_json
+from .feedback_context import measurement_context
 
 
 def _number(value):
@@ -95,6 +96,7 @@ class ScalarRefinementEvolver:
             assumption='per-case monotone feasibility in the declared direction',
             implementation=file_digest(Path(__file__)),
             artifacts=file_digest(Path(__file__).with_name('artifacts.py')),
+            feedback_context=file_digest(Path(__file__).with_name('feedback_context.py')),
             search_space=file_digest(Path(__file__).with_name('search_space.py')))
 
     def _stable(self):
@@ -105,9 +107,9 @@ class ScalarRefinementEvolver:
         self._stable()
         parameter = self.parameter
         current = parameter.inspect(parent)
-        records, excluded, evidence = [], [], {}
+        records, excluded, evidence, panel = [], [], {}, {}
 
-        def observe(candidate, value, source, extra=None):
+        def observe(candidate, value, source, extra=None, *, current_observation=False):
             origin = value['trial']['system2']
             if (origin is None or origin['split'] != 'development'
                     or origin['candidate_id'] != candidate['id']
@@ -117,10 +119,19 @@ class ScalarRefinementEvolver:
                 raise ValueError('Scalar search requires attributed development Trials')
             inspected = parameter.inspect(candidate)
             case_id = digest(dict(task=value['trial']['task'], case=value['trial']['case'], scope=value['trial']['scope']))
+            condition = measurement_context(value)
             sample = dict(source=source, trial_sha256=value['trial_sha256'], task=value['trial']['task'],
+                          receipt_sha256=digest(value['receipt']), measurement_context=condition,
                           case=value['trial']['case'], case_sha256=case_id, value=inspected['value'])
+            if current_observation:
+                if case_id in panel:
+                    raise ValueError('Current scalar development has duplicate cases')
+                panel[case_id] = condition
             if inspected['condition_sha256'] != current['condition_sha256']:
                 excluded.append(dict(sample, reason='other_controller_inputs_changed'))
+                return
+            if condition != panel[case_id]:
+                excluded.append(dict(sample, reason='measurement_context_changed'))
                 return
             outcome = value['outcome']
             classification = self.classifier.classify(deepcopy(value)) if outcome in {'success', 'failure'} else 'unresolved'
@@ -135,7 +146,7 @@ class ScalarRefinementEvolver:
                 evidence[path] = sha
 
         for value in evaluations:
-            observe(parent, value, 'current_development')
+            observe(parent, value, 'current_development', current_observation=True)
         if not records or len(evaluations) != len(records):
             raise ValueError('Current development must match the parameter context')
         targets = {row['case_sha256'] for row in records
@@ -173,7 +184,7 @@ class ScalarRefinementEvolver:
             reason = 'contradictory_case_feedback'
         report = dict(schema='physicalrsi.scalar-refinement/v1', identity=self.identity(),
             parent_sha256=verify_harness(parent), condition_sha256=current['condition_sha256'],
-            archive_view_sha256=digest(search['view']), samples=records, excluded=excluded,
+            archive_view_sha256=digest(search['view']), measurement_contexts=panel, samples=records, excluded=excluded,
             brackets=brackets, contradictions=contradictions, proposed_value=candidate_value,
             reason=reason, qualification=None)
         output = Path(output)

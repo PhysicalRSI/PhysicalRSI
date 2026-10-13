@@ -1134,8 +1134,29 @@ Legacy archives without common Trial receipts return no observations.
 A `ScalarParameter` declares one JSON field, its mutable component, bounds,
 precision and direction. A task adapter classifies development observations as
 `satisfied`, `insufficient` or `unresolved`. Search combines only the same task,
-case, scope and other controller inputs, and records every used trial and excluded
-condition in immutable `search-fit.json`. It advances beyond failed values toward
+case, scope, other controller inputs and verified execution conditions. The shared
+`feedback_context.measurement_context()` verifies the bound experiment file against
+its evidence digest, Trial and receipt, then identifies environment/verifier/runtime
+adapters, execution budget, embodiment and contracts, artifact contract and policy
+lifecycle. Policy parameters and the System 1 revision can vary within the declared
+search space. Evidence paths and System 2 stage labels are not directly included;
+paths explicitly declared inside adapter identities remain bound. Different
+budgets remain different conditions, even when
+both executions terminated within those budgets.
+
+Each current case freezes one measurement context. Duplicate current cases or
+unbound/changed experiment specifications fail before a proposal is published.
+Historical conditions that differ are recorded with
+`reason="measurement_context_changed"` and excluded before the feedback classifier
+is called, so their failures cannot exhaust a current bracket or create a false
+contradiction. Compatible screening feedback remains usable across System 2 stage
+labels. This is exact declared-condition matching, not automatic calibration or
+a guarantee that an adapter truthfully declares all external dependencies.
+Both scalar and adaptive evolver identities bind the shared helper implementation.
+Old campaigns still require their frozen source; existing evidence is not rewritten.
+
+Every used Trial, receipt identity, per-case measurement context and excluded
+condition is recorded in immutable `search-fit.json`. It advances beyond failed values toward
 the observed success bound or declared domain limit. Contradictory per-case
 feedback, exhausted bounds and unclassified failures produce no candidate.
 Publication is atomic and repeatable after interruption; the committed parent is
@@ -1208,6 +1229,44 @@ bounded simulation evidence, not broad generalization or physical qualification.
 The search domain, classifier and monotonicity assumption remain authored.
 The inspected failing test may inform a future development protocol, but it
 must then be excluded from claims of fresh held-out evaluation.
+
+### Observed execution-context acceptance, 2026-10-13
+
+`scalar-feedback-context-001` reproduced a scalar-search defect with executed
+CPU Newton Trials. The current controller requested one iteration. Historical
+controllers requested five iterations in the compatible/budget/binding cases,
+or nine iterations under a capped environment or stricter verifier. Every
+historical Trial failed its own declared check. The former scalar implementation
+pooled all those observations into the current bracket:
+
+| Historical measurement conditions | Former next proposal | Guarded next proposal |
+|---|---:|---:|
+| Identical conditions, five-iteration failure | 7 | 7 |
+| Environment executes at most one requested iteration | None: bounds exhausted | 5 |
+| Verifier uses a tighter residual tolerance | None: bounds exhausted | 5 |
+| Different declared execution budget | 7 | 5 |
+| Different declared embodiment revision | 7 | 5 |
+
+The guard excludes incompatible history before classification, leaving the
+current failure to define a new probe. These values demonstrate corrected
+inference, not that the five-iteration probe already solves the task. The
+ordinary two-task campaign still refines five to seven iterations using a
+compatible rejected probe, consumes 18 Trials, and succeeds on both independent
+final cases. Reopening it adds no Trials or actions and preserves all 396
+files' bytes and modes.
+
+An independent audit reconstructed all 30 CPU Trials across the reproductions
+and campaign. Five adaptive-search replays on identical retained inputs produced
+identical fit fields and proposal vectors apart from the declared implementation
+identity. Three previously verified native development/screening receipts also
+remain comparable: their original first-round proposal and second-round stopping
+decision are unchanged. This is read-only replay; 77 referenced native evidence
+files remained unchanged and no new simulator episode ran. It does not repair
+or reclassify the previously observed final failure on seed 50001.
+
+All 692 tests passed. Frozen baseline and candidate source, bound Trial evidence,
+native export, replay results, verified archives and the acceptance audit are at
+`/cpfs02/user/yanming/physicalrsi-core-checks/scalar-feedback-context-001`.
 
 ## Adaptive parameter search
 

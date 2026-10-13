@@ -189,11 +189,18 @@ Core imports no CLI, baseline or concrete task implementation. Application adapt
 `self_harness.parameter_search.ScalarRefinementEvolver` refines one declared
 numeric JSON parameter using verified development failures, including rejected
 probes returned by `CandidateArchive.development()`. It conditions history on
-the task, case, scope and fixed controller inputs, records the empirical bracket,
-and abstains on contradictory observations. Adapters supply the feedback
+the task, case, scope, fixed controller inputs and verified execution conditions
+(environment, verifier, runtime, budgets and contracts). Scalar and adaptive search
+share the same receipt-bound measurement-context check. Incompatible history is
+recorded as excluded before feedback classification; incomplete specifications
+and duplicate current cases are rejected. It records the empirical bracket and
+abstains on contradictory observations. Adapters supply the feedback
 classification and monotonicity assumption; fresh paired selection still governs
 inheritance. See [parameter search](../docs/core-development.md#development-feedback-parameter-search)
 for the CPU acceptance and optional Isaac integration.
+The execution-context regression study reproduced false bound exhaustion using
+actual CPU Trials and verified that the guard preserves compatible rejected-probe
+reuse and historical native development replay. No new native success is claimed.
 
 `self_harness.adaptive_search.AdaptiveParameterEvolver` searches a declared
 `ParameterSpace` of numeric JSON fields. It ranks only complete comparable
