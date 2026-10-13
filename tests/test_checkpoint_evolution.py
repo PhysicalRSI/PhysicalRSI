@@ -23,6 +23,27 @@ def pending(root):
     return campaign, initial, suite, quota, provider, coordinator, directory, request
 
 
+@pytest.mark.parametrize('port', [Provider, Backend])
+def test_training_rejects_typed_port_drift_without_polling_or_resubmission(tmp_path, monkeypatch, port):
+    settings = {'version': 1}
+    identity = port.identity
+    monkeypatch.setattr(port, 'identity', lambda self: dict(identity(self), settings=settings))
+    _, _, _, _, provider, coordinator, directory, request = pending(tmp_path)
+    before = {p.name: p.read_bytes() for p in directory.glob('*.json')}
+    settings['version'] = True
+    assert coordinator.identity() == coordinator.frozen
+    with monkeypatch.context() as patch:
+        patch.setattr(provider, 'poll', lambda handle: pytest.fail('Changed training port must not poll'))
+        with pytest.raises(ValueError, match='Frozen training provider or backend changed'):
+            coordinator.advance(request, directory)
+    assert {p.name: p.read_bytes() for p in directory.glob('*.json')} == before
+    settings['version'] = 1
+    provider.scheduler.work_once(provider.handler)
+    revision = coordinator.advance(request, directory)
+    assert coordinator.advance(request, directory) == revision
+    assert len(provider.scheduler.status()['jobs']) == 1
+
+
 def test_actual_gradient_updates_recurse_preserve_tasks_restart_and_rollback(tmp_path):
     result = run(tmp_path)
     research = result["research"]

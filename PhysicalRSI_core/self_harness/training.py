@@ -80,7 +80,7 @@ class TrainingCoordinator:
                     implementation=file_digest(Path(__file__)))
 
     def _stable(self):
-        if self.identity() != self.frozen:
+        if digest(self.identity()) != digest(self.frozen):
             raise ValueError("Frozen training provider or backend changed")
 
     def advance(self, request, output):

@@ -20,6 +20,23 @@ def compile_request(root):
     return dict(name=LESSON, conditions=CONDITIONS, required_checks=["inverse-transition"], output=root)
 
 
+@pytest.mark.parametrize('port', [ResponseCompiler, VectorBackend, InverseReplayCheck])
+def test_compiled_skill_resume_rejects_typed_port_drift(tmp_path, monkeypatch, port):
+    settings = {'version': 1}
+    identity = port.identity
+    monkeypatch.setattr(port, 'identity', lambda self: dict(identity(self), settings=settings))
+    root, _, _, _, compiler, _, _, experience, skill, _ = prepare(tmp_path)
+    output = root / 'compilation'
+    before = {p.name: p.read_bytes() for p in output.glob('*.json')}
+    settings['version'] = True
+    assert compiler.identity() == compiler._identity
+    with pytest.raises(ValueError, match='Frozen skill compiler or execution backend changed'):
+        compiler.compile(experience, **compile_request(output))
+    assert {p.name: p.read_bytes() for p in output.glob('*.json')} == before
+    settings['version'] = 1
+    assert compiler.compile(experience, **compile_request(output)) == skill
+
+
 @pytest.mark.parametrize("gain", [2., .25])
 def test_source_only_skill_transfers_then_counterexample_withdraws_it(tmp_path, monkeypatch, gain):
     resets = []

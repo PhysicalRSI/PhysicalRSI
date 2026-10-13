@@ -314,6 +314,8 @@ source bytes; changing a helper cannot preserve the old evaluator revision.
 The evaluator compares the canonical JSON identity digest to its frozen revision,
 so boolean, integer and floating-point substitutions cannot pass as unchanged
 configuration merely because Python considers their values equal.
+The same canonical identity comparison protects training coordinators and
+experience compilers, including resumed jobs and completed skill acknowledgements.
 A change before reservation blocks the whole plan; a change during adapter
 construction blocks reset while retaining the already charged reservation.
 

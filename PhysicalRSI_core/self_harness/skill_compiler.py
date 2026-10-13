@@ -39,7 +39,7 @@ class ExperienceCompiler:
                     experience=file_digest(Path(__file__).with_name("experience.py")))
 
     def _stable(self):
-        if self.identity() != self._identity:
+        if digest(self.identity()) != digest(self._identity):
             raise ValueError("Frozen skill compiler or execution backend changed")
 
     def _stage(self, path, inputs, call, recover):
