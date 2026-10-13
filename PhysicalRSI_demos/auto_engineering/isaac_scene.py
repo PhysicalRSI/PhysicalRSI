@@ -8,6 +8,12 @@ from pathlib import Path
 import time
 
 
+def capture_sensor_frame():
+    """Render active annotators at the settled scene's current simulation time."""
+    import omni.replicator.core as rep
+    rep.orchestrator.step(delta_time=0.0, pause_timeline=False, rt_subframes=4)
+
+
 def initial_sensor_frames(world, overhead, view, *, timeout=120):
     """Wait for complete native frames without advancing the settled physics.
 
@@ -15,6 +21,7 @@ def initial_sensor_frames(world, overhead, view, *, timeout=120):
     annotator arrays are not sensor observations and must never reach System 1.
     """
     started = time.monotonic()
+    physics_state = (world.current_time_step_index, world.current_time)
     renders = 0
     width, height = overhead.get_resolution()
     view_width, view_height = view.get_resolution()
@@ -22,10 +29,14 @@ def initial_sensor_frames(world, overhead, view, *, timeout=120):
         rgb, depth, presentation = overhead.get_rgba(), overhead.get_depth(), view.get_rgba()
         shapes = tuple(getattr(value, 'shape', None) for value in (rgb, depth, presentation))
         if shapes == ((height, width, 4), (height, width), (view_height, view_width, 4)):
-            return rgb, depth, presentation, dict(renders=renders, seconds=time.monotonic()-started)
+            return rgb, depth, presentation, dict(renders=renders, seconds=time.monotonic()-started,
+                capture_mode='replicator-static/v1', physics_step=physics_state[0],
+                physics_time=physics_state[1])
         if time.monotonic()-started >= timeout:
             raise TimeoutError('Native RGB-D/presentation sensors did not become ready: ' + repr(shapes))
-        world.render()
+        capture_sensor_frame()
+        if (world.current_time_step_index, world.current_time) != physics_state:
+            raise RuntimeError('Native sensor warmup advanced settled physics')
         renders += 1
         time.sleep(.05)
 

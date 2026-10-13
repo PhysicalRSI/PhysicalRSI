@@ -1977,3 +1977,22 @@ uncertain Trials requiring reconciliation, without automatic retries or policy
 failure scores. Contract tests cover a real child process reporting an exception
 then exiting zero, failure precedence over readiness, and an unreported signal
 exit. They provide software evidence, not native crash-resolution evidence.
+
+The follow-up `native-render-diagnostic-002` used Replicator's synchronous
+`step(delta_time=0.0, pause_timeline=False, rt_subframes=4)` for sensor warmup.
+On development seed 2026101503, two capture calls produced valid RGB, depth and
+presentation frames in 65.95 seconds. Warmup retained physics step 92 and time
+1.5333334133028984. The complete rollout used 1,576 physics steps and passed all
+seven independently recomputed geometry checks; the resource lease was released.
+This is one successful diagnostic, not evidence that intermittent USD crashes
+are eliminated. The adapter now uses this static-capture path and rejects any
+warmup capture that changes the physics step or simulation time before System 1
+receives an observation. Camera evidence records the capture mode and settled
+physics timestamp. The integrated implementation subsequently completed two fresh development
+cases (2026101510 and 2026101511) in `native-static-capture-001`. Both passed
+all seven independently recomputed geometry checks with 1,576 physics steps
+and no change to settled physics during warmup. Warmup took 67.23 and 70.99
+seconds, two static captures each. Both reservations were charged and the device
+registry was empty afterward. The exact implementation also passed 890 software
+tests in 169.18 seconds (`core-static-capture-001`). These acceptance results do
+not replace the interrupted benchmark or prove intermittent-crash elimination.
