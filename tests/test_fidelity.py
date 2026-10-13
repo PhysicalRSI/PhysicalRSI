@@ -289,3 +289,47 @@ def test_screening_repeated_constant_feedback_keeps_the_same_task_priority(score
     actual = evaluator._ranking_scores([repeated] * repeats + [fixed])
     assert actual == expected
     assert evaluator._ranking_scores([fixed] + [repeated] * repeats) == expected
+
+
+def test_screening_slots_follow_content_when_candidates_are_renamed_and_reordered(tmp_path, monkeypatch):
+    from PhysicalRSI_core.self_harness.artifacts import verify_harness
+    from PhysicalRSI_demos.staged_evolution import CalibrationSearch
+
+    bounded_screening(monkeypatch, dict(survivor_limit=2, ranking_profile=ranking_profile(),
+                                       minimum_success_rate=0.))
+    propose = CalibrationSearch.propose
+
+    def renamed(self, *args):
+        children = propose(self, *args)
+        return [dict(child, id='renamed-' + str(len(children) - index))
+                for index, child in reversed(list(enumerate(children)))]
+
+    observed = []
+    for variant in ('original', 'renamed'):
+        if variant == 'renamed':
+            monkeypatch.setattr(CalibrationSearch, 'propose', renamed)
+        root = tmp_path / variant
+        campaign, initial, _, quota = setup(root, max_trials=48)
+        result = campaign.run(initial)
+        report = campaign.report_test(initial)
+        directory = campaign.root / 'rounds/round-0001/execution'
+        screen = read_json(directory / 'screening.json')['output']
+        admissions = screen['candidates']
+        ranked = screen['ranking']
+        assert len(ranked) == 4
+        assert len({admissions[name]['ranking']['score'] for name in ranked[1:]}) == 1
+        assert sum(admissions[name]['accepted'] for name in ranked) == 2
+        assert admissions[initial['id']]['accepted']
+        assert all(v['success_rate'] == 1 for v in report['metrics'].values())
+        if variant == 'renamed':
+            assert all(name.startswith('renamed-') for name in ranked)
+        observed.append(dict(
+            ranked=[admissions[name]['freeze_sha256'] for name in ranked],
+            admitted=sorted(row['freeze_sha256'] for row in admissions.values() if row['accepted']),
+            selected=verify_harness(result['current']['harness']),
+            reserved_trials=quota.status()['reserved_trials']))
+        # The reopened run consumes no additional screening or validation slots.
+        reopened, seed, fresh, _ = setup(root, max_trials=48)
+        assert reopened.run(seed) == result and reopened.report_test(seed) == report
+        assert not fresh.resets and quota.status()['reserved_trials'] == observed[-1]['reserved_trials']
+    assert observed[0] == observed[1]

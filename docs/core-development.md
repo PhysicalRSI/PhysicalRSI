@@ -651,6 +651,11 @@ exact ties use executable content hashes, independent of candidate names or
 scheduler completion order. Only children that satisfy every success threshold
 compete for slots; the incumbent is always retained outside the cap, including
 when it has no screening measurement.
+An integration regression renames and reverses the complete child pool across
+two independently executed calibration campaigns. Ranked content identities,
+admitted branches, the selected harness and Trial consumption stay identical;
+reopening either campaign performs no additional rollouts. This checks the
+declared tie policy, not a performance advantage from screening.
 
 A bounded screen rejects missing, nonfinite or out-of-range measurements before
 full dispatch. Profiles, limits and measurement mappings are frozen in evaluator
