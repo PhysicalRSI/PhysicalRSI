@@ -43,6 +43,8 @@ class ImprovementCampaign:
 
     def _run(self, initial):
         first = self.build_loop(self._directory(0))
+        if first.archive is not None and first.archive.root.is_relative_to(self.root / "rounds"):
+            raise ValueError("Keep the candidate archive outside campaign round evidence")
         statistics = first.config["profile"].get("statistics")
         if statistics and self.max_rounds * first.config["max_candidates"] > statistics["max_comparisons"]:
             raise ValueError("Campaign exceeds preregistered statistical comparison budget")
@@ -67,6 +69,8 @@ class ImprovementCampaign:
             if (record["index"] != index or record["parent_revision"] != expected
                     or record["files"] != _manifest(directory)):
                 raise ValueError("Completed campaign round changed")
+            from .archive import verify_archive_receipt
+            verify_archive_receipt(directory)
             saved = self.state.read(record["result_revision"])
             if (saved["revision"] != expected and saved["previous"] != expected):
                 raise StateConflict("Campaign result does not descend from its parent")
@@ -106,7 +110,7 @@ class ImprovementCampaign:
                 raise StateConflict("Unexpected campaign lineage transition")
             ledger["rounds"].append(dict(
                 index=index, parent_revision=expected, result_revision=result["revision"],
-                outcome="retained" if result["revision"] == expected else "inherited",
+                outcome="retained" if result["freeze_sha256"] == self.state.read(expected)["freeze_sha256"] else "inherited",
                 files=_manifest(directory)))
             atomic_json(path, ledger)
             expected = result["revision"]

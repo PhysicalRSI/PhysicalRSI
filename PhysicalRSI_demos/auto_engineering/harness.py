@@ -68,7 +68,8 @@ class Evaluation:
         atomic_json(icd,{'file_format_version':'1.0.0','ICD':{'library_path':('libGLX_nvidia.so.0' if self.gui else 'libEGL_nvidia.so.0'),'api_version':'1.3.194'}})
         env['VK_ICD_FILENAMES']=str(icd)
         command=[self.python,'-m','PhysicalRSI_demos.auto_engineering.isaac_scene',
-                 '--seed',str(seed),'--memory',str(Path(candidate['root'])/'memory_rules.json'),'--output',str(output)]
+                 '--seed',str(seed),'--memory',str(Path(candidate['root'])/'memory_rules.json'),'--output',str(output),
+                 '--runtime-root',str(scratch/'kit')]
         if self.gui:command.append('--gui')
         log=output.parent/(output.name+'.log')
         with log.open('x') as stream:
@@ -131,12 +132,8 @@ class Selector:
     def select(self,*args,**kwargs):return selection.select_survivor(*args,**kwargs)
 
 
-def run(workspace,python,episodes=3,gui=False):
-    if not 1<=episodes<=50:raise ValueError('Use 1 to 50 paired validation layouts')
-    root=Path(workspace).resolve();root.mkdir(parents=True,exist_ok=True)
-    if (root/'state/current.json').exists():
-        raise ValueError('Use a fresh workspace; existing native evidence is retained')
-    seed=root/'seed';seed.mkdir(exist_ok=False)
+def create_seed(seed):
+    seed=Path(seed);seed.mkdir(parents=True,exist_ok=False)
     for kind in CLOSURE:
         value={'kind':kind,'protocol':PROTOCOL,'scope':SCOPE}
         if kind=='foundation':value={'agent':'Codex-authored reviewed code policy','weights':None}
@@ -149,13 +146,22 @@ def run(workspace,python,episodes=3,gui=False):
     (seed/'source').mkdir()
     for source in Path(__file__).parent.glob('*.py'):
         shutil.copyfile(source,seed/'source'/source.name)
+    return manifest(seed,'initial')
+
+
+def run(workspace,python,episodes=3,gui=False):
+    if not 1<=episodes<=50:raise ValueError('Use 1 to 50 paired validation layouts')
+    root=Path(workspace).resolve();root.mkdir(parents=True,exist_ok=True)
+    if (root/'state/current.json').exists():
+        raise ValueError('Use a fresh workspace; existing native evidence is retained')
+    initial=create_seed(root/'seed')
     evaluator=Evaluation(python,root,gui);state=HarnessState(root/'state')
     loop=SelfHarness(root/'round-001',state=state,proposer=Proposal(evaluator),evaluator=evaluator,
         selector=Selector(),scope=SCOPE,max_candidates=1,
         profile={'tasks':{TASK:{'weight':1,'episodes':episodes,'score_range':[0,1],'maximum_regression':0}},
                  'minimum_gain':0,'tie_tolerance':1e-10},
         protocol={'identity':PROTOCOL,'evaluation_kind':'native_isaac_development','qualification':None})
-    state.initialize(manifest(seed,'initial'),policy=loop.config,scope=SCOPE)
+    state.initialize(initial,policy=loop.config,scope=SCOPE)
     current=loop.run()
     result={'state':'completed','selected_revision':current['revision'],'selected_policy':current['harness']['id'],
             'scope':SCOPE,'qualification':None,'benchmark_wide_score':None}

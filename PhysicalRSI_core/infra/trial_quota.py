@@ -72,3 +72,14 @@ class TrialQuota:
             count = len(self._read()["trials"])
         return dict(max_trials=self.max_trials, reserved_trials=count,
                     remaining_trials=self.max_trials - count)
+
+    def verify(self, trials):
+        """Read an existing reservation without admitting any new work."""
+        if not isinstance(trials, dict) or not trials:
+            raise ValueError("Declare a nonempty trial plan")
+        requested = {identifier(key): digest(value) for key, value in trials.items()}
+        with locked(self.root / ".lock"):
+            ledger = self._read()
+            if any(ledger["trials"].get(key) != sha for key, sha in requested.items()):
+                raise ValueError("Trial plan lacks its exact quota reservations")
+        return dict(schema="physicalrsi.trial-reservations/v1", quota=self.identity(), trials=requested)

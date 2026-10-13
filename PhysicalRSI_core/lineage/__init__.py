@@ -1,6 +1,6 @@
 """Local CAS lineage for a scoped harness, with immutable history and rollback.
 
-This records a selection, not a physical capability certificate. The caller owns
+This records assessed selections, not a physical capability certificate. The caller owns
 independent evaluation; one host with working POSIX flock owns this store.
 """
 
@@ -14,7 +14,7 @@ from PhysicalRSI_core.infra.storage import (
     locked,
     read_json,
 )
-from PhysicalRSI_core.self_harness.artifacts import verify_harness
+from PhysicalRSI_core.self_harness.artifacts import EvolutionSpec, HarnessSnapshots, _HarnessReadAudit, verify_harness
 
 
 class StateConflict(ValueError):
@@ -24,18 +24,29 @@ class StateConflict(ValueError):
 class HarnessState:
     def __init__(self, root):
         self.root = Path(root).resolve()
+        self.snapshots = HarnessSnapshots(self.root / "snapshots")
 
-    def _record(self, revision):
+    def _metadata(self, revision):
         if (not isinstance(revision, str) or len(revision) != 64
                 or any(c not in "0123456789abcdef" for c in revision)):
             raise ValueError("Expected a content-addressed lineage revision")
         value = read_json(self.root / "history" / (revision + ".json"))
         if digest(value) != revision:
             raise ValueError("Lineage record changed")
-        if verify_harness(value["harness"]) != value["freeze_sha256"]:
+        return value
+
+    def _record(self, revision):
+        return self._audit_record(revision, _HarnessReadAudit(), {})
+
+    def _audit_record(self, revision, harnesses, evidence):
+        value = self._metadata(revision)
+        if harnesses.verify(value["harness"]) != value["freeze_sha256"]:
             raise ValueError("Committed harness changed")
         for path, sha in value.get("evidence", {}).items():
-            if file_digest(Path(path)) != sha:
+            path = Path(path)
+            if path not in evidence:
+                evidence[path] = file_digest(path)
+            if evidence[path] != sha:
                 raise ValueError("Committed evidence changed")
         return value
 
@@ -48,6 +59,24 @@ class HarnessState:
         record = self._record(revision)
         return dict(revision=revision, **record)
 
+    def history(self, revision):
+        """Audit a complete ancestry, newest first, sharing checks within this read.
+
+        Repeated snapshots and evidence paths are read once. Every declaration
+        is still compared with the checked hash; the next call reads them again.
+        """
+        if revision is None:
+            raise ValueError("Expected a content-addressed lineage revision")
+        records, seen, evidence, harnesses = [], set(), {}, _HarnessReadAudit()
+        while revision is not None:
+            record = self._audit_record(revision, harnesses, evidence)
+            if revision in seen:
+                raise ValueError("Cyclic lineage history")
+            seen.add(revision)
+            records.append(dict(revision=revision, **record))
+            revision = record["previous"]
+        return records
+
     def initialize(self, initial, *, policy, scope):
         with locked(self.root / ".state.lock"):
             if (self.root / "current.json").exists():
@@ -56,7 +85,7 @@ class HarnessState:
                     raise ValueError("State scope or frozen policy changed")
                 return current
             body = dict(
-                harness=deepcopy(initial),
+                harness=self.snapshots.capture(initial),
                 freeze_sha256=verify_harness(initial),
                 policy=policy,
                 scope=scope,
@@ -181,6 +210,8 @@ class HarnessState:
                 != current["harness"]["components"]["foundation"]
             ):
                 raise ValueError("Foundation F changed")
+            if "evolution" in current["policy"]:
+                EvolutionSpec.from_identity(current["policy"]["evolution"]).compare(current["harness"], survivor)
             if not evidence:
                 raise ValueError("Commit requires comparison evidence")
             for path, sha in evidence.items():
@@ -189,16 +220,18 @@ class HarnessState:
             if decision["decision"] == "retain_parent":
                 if freeze != current["freeze_sha256"]:
                     raise ValueError("Retain must preserve the parent")
-                return current
-            if decision["decision"] != "inherit_child":
+                action = "assessment"
+            elif decision["decision"] == "inherit_child":
+                action = "selection"
+            else:
                 raise ValueError("Unknown decision")
             body = dict(
-                harness=deepcopy(survivor),
+                harness=deepcopy(current["harness"]) if action == "assessment" else self.snapshots.capture(survivor),
                 freeze_sha256=freeze,
                 policy=current["policy"],
                 scope=current["scope"],
                 previous=expected,
-                action="selection",
+                action=action,
                 evidence=deepcopy(evidence),
                 decision=deepcopy(decision),
             )
@@ -206,22 +239,85 @@ class HarnessState:
             self._record(result["revision"])
             return result
 
-    def rollback(self, expected):
+    def rollback(self, expected, *, target=None, reason="operator rollback"):
+        """CAS to an audited ancestor, even if the active artifact is damaged.
+
+        Current and intervening history metadata must still hash correctly. The
+        target's files and evidence must pass full verification. Unknown history
+        corruption requires separate recovery; rollback never bypasses it.
+        """
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("Record a rollback reason")
         with locked(self.root / ".state.lock"):
-            current = self.resolve()
-            if current["revision"] != expected:
+            revision = read_json(self.root / "current.json")["revision"]
+            current = self._metadata(revision)
+
+            def previous_selection(record):
+                # Assessments advance evidence, not the deployed artifact.
+                # Consecutive rollbacks step back selected generations.
+                while record["action"] in {"rollback", "assessment"}:
+                    record = self._metadata(record["rollback_to"] if record["action"] == "rollback"
+                                            else record["previous"])
+                return record["previous"]
+
+            if (current["action"] == "rollback" and current["previous"] == expected
+                    and current.get("rollback_reason") == reason):
+                requested = previous_selection(self._metadata(expected)) if target is None else target
+                if current["rollback_to"] == requested:
+                    return self.read(revision)
+            if revision != expected:
                 raise StateConflict("Committed parent changed before rollback")
-            if current["previous"] is None:
+            if target is None:
+                target = previous_selection(current)
+            if target is None:
                 raise ValueError("No previous harness")
-            previous = self._record(current["previous"])
+            ancestor, seen = current["previous"], set()
+            while ancestor is not None and ancestor != target:
+                if ancestor in seen:
+                    raise ValueError("Cyclic lineage history")
+                seen.add(ancestor)
+                ancestor = self._metadata(ancestor)["previous"]
+            if ancestor is None:
+                raise ValueError("Rollback target is not an ancestor")
+            previous = self._record(target)
+            if previous["policy"] != current["policy"] or previous["scope"] != current["scope"]:
+                raise ValueError("Rollback target has another policy or scope")
             return self._publish(
                 dict(
                     previous,
                     previous=expected,
                     action="rollback",
-                    rollback_to=current["previous"],
+                    rollback_to=target,
+                    rollback_reason=reason,
                 )
             )
+
+    def restore_snapshot(self, expected, *, revision, source, reason):
+        """Restore an owned ancestor/current snapshot from a verified replica.
+
+        This explicit maintenance operation preserves the lineage head and the
+        original artifact hash. It does not resume workers or change selection.
+        """
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("Record a snapshot restoration reason")
+        with locked(self.root / ".state.lock"):
+            head = read_json(self.root / "current.json")["revision"]
+            if head != expected:
+                raise StateConflict("Committed parent changed before snapshot restoration")
+            current, seen = head, set()
+            while current != revision:
+                if current is None:
+                    raise ValueError("Snapshot restoration target is not an ancestor")
+                if current in seen:
+                    raise ValueError("Cyclic lineage history")
+                seen.add(current)
+                current = self._metadata(current)["previous"]
+            record = self._metadata(revision)
+            if digest(dict(components=record["harness"]["components"])) != record["freeze_sha256"]:
+                raise ValueError("Snapshot restoration declaration changed")
+            return self.snapshots.restore(record["harness"], source,
+                operation=dict(expected_head=expected, target_revision=revision, reason=reason,
+                               implementation=file_digest(Path(__file__))))
 
     def reserve_validation(self, comparison, layouts):
         with locked(self.root / ".validation.lock"):

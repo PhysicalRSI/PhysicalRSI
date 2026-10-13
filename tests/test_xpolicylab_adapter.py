@@ -30,6 +30,10 @@ def test_adapter_installs_into_an_upstream_checkout(tmp_path):
     import re
     obsolete = re.compile('route|router|routing', re.IGNORECASE)
     for path in destination.rglob('*'):
+        # The retired provider interface uses skill names. Core now also ships
+        # generic capability routing; it is not that legacy provider interface.
+        if path.relative_to(destination).parts[:2] == ('runtime', 'PhysicalRSI_core'):
+            continue
         assert not obsolete.search(str(path.relative_to(destination))), path
         if path.is_file() and path.suffix in {'.py', '.json', '.md', '.sh', '.yml', '.yaml'}:
             assert not obsolete.search(path.read_text()), path
@@ -48,7 +52,7 @@ def test_installed_runtime_imports_without_source_checkout(tmp_path):
     destination = install(checkout)
     environment = dict(os.environ, PYTHONPATH=str(destination / 'runtime'))
     result = subprocess.run(
-        [sys.executable, '-c', 'from PhysicalRSI_baselines.robodojo.skill_model import Model; from PhysicalRSI_baselines.robodojo.execution_skills import compose_skill; print("runtime-import-ok")'],
+        [sys.executable, '-c', 'from PhysicalRSI_baselines.robodojo.skill_model import Model; from PhysicalRSI_baselines.robodojo.execution_skills import compose_skill; from PhysicalRSI_core.harness_tree import HarnessTree, RoutedPolicy; from PhysicalRSI_core.self_harness.retention import RetentionSelector; from PhysicalRSI_core.checkpoints import CheckpointStore; from PhysicalRSI_core.self_harness.training import CheckpointEvolutionSpec, TrainingCoordinator; print("runtime-import-ok")'],
         cwd=tmp_path, env=environment, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
     assert 'runtime-import-ok' in result.stdout

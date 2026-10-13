@@ -9,6 +9,7 @@ import math
 from pathlib import Path
 
 from ..infra.storage import digest, file_digest, read_json
+from ..trials import Evaluation, task_case_identity
 from .selection import comparison_identity
 
 
@@ -40,6 +41,9 @@ def experiment_result(runtime, run_ids, *, candidate_id, comparison, cohort,
     cohort_sha = digest(cohort)
     if cohort.get("comparison_sha256") != comparison_sha or cohort.get("split") != "validation":
         raise ValueError("Experiment cohort differs from the frozen comparison")
+    identity_scheme = cohort.get("case_identity", "case/v1")
+    if identity_scheme not in {"case/v1", "task-case/v1"}:
+        raise ValueError("Unsupported experiment case identity scheme")
     if candidate_id not in comparison["candidates"] or not evaluator_revision:
         raise ValueError("Declare an admitted candidate and evaluator revision")
     run_ids = tuple(run_ids)
@@ -58,7 +62,9 @@ def experiment_result(runtime, run_ids, *, candidate_id, comparison, cohort,
     expected = {(task, case) for task, cases in layouts.items() for case in cases}
     used, rows, protocols, system2_revisions = set(), [], [], set()
     for run_id in run_ids:
-        receipt = runtime.read(run_id)
+        evaluation = Evaluation.read(runtime, run_id)
+        value = evaluation.to_dict()
+        receipt = value["receipt"]
         folder = runtime.root / run_id
         specification = read_json(folder / "experiment.json")
         origin = specification.get("system2")
@@ -75,26 +81,25 @@ def experiment_result(runtime, run_ids, *, candidate_id, comparison, cohort,
                 or specification["scope"] != comparison["scope"]):
             raise ValueError("Experiment execution revision or scope differs")
         system2_revisions.add(digest(origin["system2"]))
-        pair = (specification["task"], digest(specification["case"]))
+        task, case = specification["task"], specification["case"]
+        pair = (task, task_case_identity(task, case) if identity_scheme == "task-case/v1" else digest(case))
         if pair not in expected or pair in used:
             raise ValueError("Experiment cases are not paired with the frozen cohort")
         success = receipt["outcome"] == "success"
         score = experiment_score(receipt, score_measurement=score_measurement,
                                  score_range=tasks[pair[0]]["score_range"])
         evidence = {}
-        for name in ["receipt.json", *receipt["evidence"]]:
-            path = (folder / name).resolve()
+        for name, sha in value["evidence"].items():
+            path = Path(name)
             if not path.is_relative_to(root):
                 raise ValueError("Experiment evidence lies outside the comparison root")
-            sha = file_digest(path)
-            if name != "receipt.json" and sha != receipt["evidence"][name]:
+            if file_digest(path) != sha:
                 raise ValueError("Experiment evidence changed while building evaluation")
-            if name == "receipt.json" and read_json(path) != receipt:
-                raise ValueError("Experiment receipt changed while building evaluation")
             evidence[str(path.relative_to(root))] = sha
         used.add(pair)
         rows.append(dict(task=pair[0], layout_sha256=pair[1], state="completed",
                          score=score, success=success, evidence_sha256=evidence,
+                         trial_sha256=value["trial_sha256"], evaluation_sha256=evaluation.revision,
                          measurements=receipt["verdict"]["measurements"]))
         # Policies may differ; execution conditions and independent scoring must
         # agree for each paired case across the whole candidate pool.

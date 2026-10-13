@@ -14,7 +14,7 @@ from typing import Protocol
 
 from .contracts import Context, ReconciliationRequired
 from .embodiment import Embodiment, ExecutionBinding, System1, System2Trial
-from .infra import devices, storage
+from .infra import devices, evidence, storage, trial_artifacts
 from .infra.storage import atomic_json, digest, file_digest, identifier, locked, read_json
 
 
@@ -86,6 +86,59 @@ class Verifier(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class TrialAdapters:
+    """One trial's environment, policy and verifier, constructed without effects.
+
+    A suite may implement trial(candidate, task) to bind stateful adapters as one
+    bundle. Factories must create independent bundles for concurrent trials.
+    Construction does not reset, actuate, start workers or reserve devices.
+    """
+    environment: Environment
+    policy: Policy
+    verifier: Verifier
+
+    def __post_init__(self):
+        for port, methods in ((self.environment, ("identity", "reset", "step")),
+                              (self.policy, ("identity", "act")), (self.verifier, ("identity", "verify"))):
+            if any(not callable(getattr(port, name, None)) for name in methods):
+                raise ValueError("Trial adapters require complete environment, policy and verifier ports")
+
+
+def trial_factory_kind(suite):
+    factory = getattr(suite, "trial", None)
+    if factory is not None and not callable(factory):
+        raise ValueError("Optional trial factory must be callable")
+    return "bundled" if factory is not None else "legacy"
+
+
+def trial_adapters(suite, candidate, task):
+    """Prefer an indivisible factory; retain existing independent legacy ports."""
+    if trial_factory_kind(suite) == "bundled":
+        adapters = suite.trial(deepcopy(candidate), task)
+        if not isinstance(adapters, TrialAdapters):
+            raise ValueError("Trial factory must return TrialAdapters")
+        return adapters
+    environment = suite.environment(task)
+    return TrialAdapters(environment, suite.policy(deepcopy(candidate), task), suite.verifier(task))
+
+
+def runtime_implementation():
+    """Owned execution dependencies, shared by Trial and evaluator identities.
+
+    Read actual source bytes on every identity check. Historical evidence can
+    still be audited independently; executing under changed code needs a new
+    frozen evaluator and Trial. External libraries remain provider-owned.
+    """
+    root = Path(__file__).parent
+    return {name: file_digest(root / path) for name, path in {
+        "runtime": "experiments.py", "contracts": "contracts.py", "trials": "trials.py",
+        "trial_artifacts": "infra/trial_artifacts.py", "evidence": "infra/evidence.py",
+        "embodiment": "embodiment.py", "timing": "timing.py",
+        "devices": "infra/devices.py", "storage": "infra/storage.py",
+    }.items()}
+
+
 def _binding(environment, policy):
     declarations = [getattr(adapter, "describe", None) for adapter in (environment, policy)]
     if all(declaration is None for declaration in declarations):
@@ -111,12 +164,34 @@ class ExperimentRuntime:
         self.root = Path(root).resolve()
         self.device_registry = device_registry
 
+    def run_trial(self, trial, *, environment, policy, verifier):
+        """Execute the shared Trial contract; legacy run() uses the same path."""
+        from .trials import Trial
+        if not isinstance(trial, Trial):
+            raise ValueError("Expected a Trial")
+        return self.run(**trial.arguments(), environment=environment, policy=policy, verifier=verifier)
+
+    def evaluate(self, trial, *, environment, policy, verifier):
+        """Return a verified Evaluation with the actual observations/actions."""
+        from .trials import Evaluation
+        receipt = self.run_trial(trial, environment=environment, policy=policy, verifier=verifier)
+        return Evaluation.read(self, receipt["id"])
+
     def read(self, run_id):
+        return self.read_evidence(run_id)["receipt"]
+
+    def read_evidence(self, run_id):
+        """Verify once and return receipt, parsed documents and raw-file hashes.
+
+        No execution or adapter callback occurs during this audit. The reader
+        is local to this call; every later read performs a fresh byte audit.
+        """
         folder = self.root / identifier(run_id)
-        receipt = read_json(folder / "receipt.json")
+        reader = evidence.EvidenceReader(folder)
+        receipt = reader.document("receipt.json")
         if receipt["state"] != "completed":
             raise ReconciliationRequired(f"Inspect interrupted experiment: {folder}")
-        specification = read_json(folder / "experiment.json")
+        specification = reader.document("experiment.json", receipt["evidence"].get("experiment.json"))
         if specification["schema"] not in {"physicalrsi.experiment/v1", "physicalrsi.experiment/v2"}:
             raise ValueError("Unsupported experiment schema")
         version = specification["schema"].rsplit("/", 1)[1]
@@ -132,12 +207,27 @@ class ExperimentRuntime:
             required.add("policy.json")
         elif specification.get("policy_lifecycle") is not None:
             raise ValueError("Unknown policy lifecycle")
+        if specification.get("artifact_contract") == "files/v1":
+            artifacts = trial_artifacts.artifact_entries(folder,
+                reader.document("artifacts.json", receipt["evidence"].get("artifacts.json")))
+            required.update({"artifacts.json", *artifacts})
+        elif specification.get("artifact_contract") is not None:
+            raise ValueError("Unknown adapter artifact contract")
+        if specification.get("policy_evidence_contract") == "json/v1":
+            required.add("policy-evidence.json")
+        elif specification.get("policy_evidence_contract") is not None:
+            raise ValueError("Unknown policy evidence contract")
         if set(receipt["evidence"]) != required:
             raise ValueError("Experiment evidence manifest is incomplete or unexpected")
-        for name, expected in receipt["evidence"].items():
-            path = (folder / name).resolve()
-            if not path.is_relative_to(folder) or file_digest(path) != expected:
-                raise ValueError("Experiment evidence changed: " + name)
+        if specification.get("artifact_contract") == "files/v1" and any(
+                receipt["evidence"][name] != sha for name, sha in artifacts.items()):
+            raise ValueError("Trial artifact evidence changed: manifest disagrees with receipt")
+        # These are the exact JSON bytes used for semantic checks and exposed
+        # to Evaluation. Binary artifacts only need a streaming digest.
+        for name in required.intersection({"reset.json", "trajectory.json", "verdict.json",
+                                           "lease.json", "quiescence.json", "policy.json"}):
+            reader.document(name, receipt["evidence"][name])
+        reader.verify(receipt["evidence"])
         if (receipt["id"] != run_id or receipt["scope"] != specification["scope"]
                 or receipt["qualification"] is not None):
             raise ValueError("Receipt identity or qualification differs from the experiment")
@@ -145,14 +235,14 @@ class ExperimentRuntime:
             receipt.get(key) != specification.get(key) for key in ("binding", "system2")
         ):
             raise ValueError("Receipt execution binding changed")
-        verdict = read_json(folder / "verdict.json")
+        verdict = reader.document("verdict.json")
         if receipt["verdict"] != verdict or receipt["outcome"] != verdict["outcome"]:
             raise ValueError("Receipt disagrees with the recorded verdict")
-        trace = read_json(folder / "trajectory.json")
+        trace = reader.document("trajectory.json")
         if receipt["steps"] != max(0, len(trace) - 1):
             raise ValueError("Receipt step count differs from the trajectory")
         if version == "v2":
-            initial = read_json(folder / "reset.json")
+            initial = reader.document("reset.json")
             if initial["ready"] is False:
                 termination = "reset_not_ready"
             elif initial.get("terminated", False) or (len(trace) > 1 and trace[-1]["terminated"]):
@@ -164,14 +254,17 @@ class ExperimentRuntime:
             if receipt.get("termination") != termination:
                 raise ValueError("Receipt termination differs from the recorded observations")
         if "lease.json" in required:
-            lease = read_json(folder / "lease.json")
+            lease = reader.document("lease.json")
             if (lease["resources"] != binding["embodiment"]["resources"]
                     or lease["registry"] != specification["device_registry"]
-                    or read_json(folder / "quiescence.json").get("quiescent") is not True):
+                    or reader.document("quiescence.json").get("quiescent") is not True):
                 raise ValueError("Device evidence differs from the execution binding")
-        if "policy.json" in required and read_json(folder / "policy.json").get("stopped") is not True:
+        if "policy.json" in required and reader.document("policy.json").get("stopped") is not True:
             raise ValueError("Policy termination lacks confirmed cleanup evidence")
-        return receipt
+        reader.unchanged_document("receipt.json")
+        return dict(receipt=receipt, specification=specification,
+                    documents={name:reader.document(name) for name in ("reset.json", "trajectory.json", "verdict.json")},
+                    evidence={str(reader.path(name)):sha for name,sha in reader.hashes.items()})
 
     def run(self, run_id, *, task, case, scope, environment, policy, verifier,
             budget=None, system2: System2Trial | None = None):
@@ -183,6 +276,12 @@ class ExperimentRuntime:
         finish_policy = getattr(policy, "end_episode", None)
         if finish_policy is not None and not callable(finish_policy):
             raise ValueError("Optional policy end_episode must be callable")
+        export_evidence = getattr(environment, "export_evidence", None)
+        if export_evidence is not None and not callable(export_evidence):
+            raise ValueError("Optional environment export_evidence must be callable")
+        policy_evidence = getattr(policy, "execution_evidence", None)
+        if policy_evidence is not None and not callable(policy_evidence):
+            raise ValueError("Optional policy execution_evidence must be callable")
         if system2 is not None:
             if not isinstance(system2, System2Trial) or binding is None:
                 raise ValueError("System 2 attribution requires a declared System 1")
@@ -193,25 +292,25 @@ class ExperimentRuntime:
 
         def identities():
             return _json(dict(environment=environment.identity(), policy=policy.identity(),
-                              verifier=verifier.identity(), runtime=file_digest(Path(__file__)),
-                              contracts=file_digest(Path(__file__).with_name("contracts.py")),
-                              embodiment=file_digest(Path(__file__).with_name("embodiment.py")),
-                              timing=file_digest(Path(__file__).with_name("timing.py")),
-                              devices=file_digest(Path(devices.__file__)),
-                              storage=file_digest(Path(storage.__file__))))
+                              verifier=verifier.identity(), **runtime_implementation()))
 
         specification = _json(dict(
             schema="physicalrsi.experiment/v2", task=task, case=case,
             scope=scope, budget=asdict(budget), adapters=identities(),
             binding=asdict(binding) if binding else None,
             policy_lifecycle="episode" if finish_policy is not None else None,
+            artifact_contract="files/v1" if export_evidence is not None else None,
             system2=asdict(system2) if system2 else None,
             device_registry=self.device_registry.identity() if resources else None))
+        if policy_evidence is not None:
+            specification["policy_evidence_contract"] = "json/v1"
 
         def stable():
             current = _binding(environment, policy)
             if (identities() != specification["adapters"]
                     or callable(getattr(policy, "end_episode", None)) != bool(specification["policy_lifecycle"])
+                    or callable(getattr(environment, "export_evidence", None)) != bool(specification["artifact_contract"])
+                    or callable(getattr(policy, "execution_evidence", None)) != bool(specification.get("policy_evidence_contract"))
                     or _json(asdict(current) if current else None) != specification["binding"]):
                 raise ValueError("An adapter changed during the experiment")
 
@@ -265,6 +364,14 @@ class ExperimentRuntime:
                 atomic_json(folder / "policy.json", dict(stopped=False, error_type=type(error).__name__))
                 raise
 
+        def record_policy_evidence():
+            if specification.get("policy_evidence_contract"):
+                value = _json(policy.execution_evidence())
+                if not isinstance(value, dict) or not value:
+                    raise ValueError("Policy execution evidence must be a nonempty JSON object")
+                atomic_json(folder / "policy-evidence.json", value)
+                evidence_names.add("policy-evidence.json")
+
         try:
             stable()
             context.check()
@@ -286,6 +393,9 @@ class ExperimentRuntime:
                     policy_started = True
                     policy.begin_episode(specification["task"], deepcopy(case),
                                          deepcopy(initial["observation"]), context)
+                    # Retain initial policy evidence before the first
+                    # environment action, including when that action is lost.
+                    record_policy_evidence()
                     context.check()
                 termination = "environment" if initial.get("terminated", False) else "step_budget"
                 for step in range(0 if termination == "environment" else budget.max_steps):
@@ -327,6 +437,14 @@ class ExperimentRuntime:
                     raise ReconciliationRequired("Environment did not confirm device quiescence")
                 context.check()
             stable()
+            if specification["artifact_contract"]:
+                evidence_names.update(trial_artifacts.capture(folder, environment.export_evidence()))
+                context.check()
+                stable()
+            if specification.get("policy_evidence_contract"):
+                record_policy_evidence()
+                context.check()
+                stable()
             atomic_json(folder / "trajectory.json", trace)
             atomic_json(folder / "verdict.json", verdict)
             receipt.update(state="completed", outcome=verdict["outcome"], verdict=verdict,

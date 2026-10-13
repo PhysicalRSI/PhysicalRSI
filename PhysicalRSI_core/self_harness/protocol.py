@@ -143,7 +143,9 @@ class PreregisteredSuite:
         self.shadow_gate = shadow_gate
 
     def identity(self):
+        from ..experiments import trial_factory_kind
         return dict(kind="preregistered-suite/v1", suite=self.suite.identity(),
+                    trial_factory=trial_factory_kind(self.suite),
                     protocol=self.protocol.identity(),
                     shadow_gate=self.shadow_gate.identity() if self.shadow_gate else None)
 
@@ -152,7 +154,9 @@ class PreregisteredSuite:
 
     def policy_identity(self):
         from .bindings import policy_identity
+        from ..experiments import trial_factory_kind
         return dict(kind="preregistered-suite-policy/v1", suite=policy_identity(self.suite),
+                    trial_factory=trial_factory_kind(self.suite),
                     protocol=self.protocol.policy_identity(),
                     shadow_gate=policy_identity(self.shadow_gate) if self.shadow_gate else None)
 
@@ -177,6 +181,10 @@ class PreregisteredSuite:
 
     def environment(self, task):
         return self.suite.environment(task)
+
+    def trial(self, candidate, task):
+        from ..experiments import trial_adapters
+        return trial_adapters(self.suite, candidate, task)
 
     def policy(self, candidate, task):
         return self.suite.policy(candidate, task)

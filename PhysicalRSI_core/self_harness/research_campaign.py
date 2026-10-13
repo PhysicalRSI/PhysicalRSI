@@ -74,6 +74,9 @@ class ResearchCampaign:
         if record["state"] != "completed" or digest(record["output"]) != record["output_sha256"]:
             raise ValueError("Development receipt changed")
         feedback = deepcopy(record["output"])
+        if "evaluations" in feedback:
+            from .rollout import development_evaluations
+            development_evaluations(read_json(loop.root / "parent.json")["harness"], feedback, loop.root)
         allowed = {}
         for name, sha in feedback["evidence"].items():
             path = (loop.root / relative_path(name)).resolve()
@@ -119,6 +122,8 @@ class ResearchCampaign:
         # must not execute experiments or invoke proposal/reflection providers.
         template_context = self._context(0, "0" * 64, self.initial_memory, None)
         template = self.build_loop(self.root / "template", template_context)
+        if template.archive is not None and template.archive.root.is_relative_to(self.root / "rounds"):
+            raise ValueError("Keep the candidate archive outside campaign round evidence")
         if template.round_context != template_context:
             raise ValueError("Research loop must use the supplied round context")
         statistics = template.policy["profile"].get("statistics")
@@ -158,6 +163,8 @@ class ResearchCampaign:
             directory = self.root / "rounds" / f"round-{check['index']:04d}"
             if record["files"] != _manifest(directory):
                 raise ValueError("Completed research round changed")
+            from .archive import verify_archive_receipt
+            verify_archive_receipt(directory / "execution")
             prior = self._read(check["previous"])
             if (check["index"] != prior["index"] + 1
                     or record["parent_revision"] != prior["harness_revision"]

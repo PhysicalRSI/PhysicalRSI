@@ -8,11 +8,40 @@ from pathlib import Path
 import time
 
 
+def initial_sensor_frames(world, overhead, view, *, timeout=120):
+    """Wait for complete native frames without advancing the settled physics.
+
+    Shader compilation can outlast a fixed number of physics steps. Empty
+    annotator arrays are not sensor observations and must never reach System 1.
+    """
+    started = time.monotonic()
+    renders = 0
+    width, height = overhead.get_resolution()
+    view_width, view_height = view.get_resolution()
+    while True:
+        rgb, depth, presentation = overhead.get_rgba(), overhead.get_depth(), view.get_rgba()
+        shapes = tuple(getattr(value, 'shape', None) for value in (rgb, depth, presentation))
+        if shapes == ((height, width, 4), (height, width), (view_height, view_width, 4)):
+            return rgb, depth, presentation, dict(renders=renders, seconds=time.monotonic()-started)
+        if time.monotonic()-started >= timeout:
+            raise TimeoutError('Native RGB-D/presentation sensors did not become ready: ' + repr(shapes))
+        world.render()
+        renders += 1
+        time.sleep(.05)
+
+
 def run(args):
+    from importlib.metadata import version
+    runtime_version = version('isaacsim')
+    if runtime_version not in {'5.1.0', '5.1.0.0'}:
+        raise ValueError('This native protocol requires Isaac Sim 5.1.0')
     from isaacsim import SimulationApp
+    extra_args = []
+    if getattr(args, 'runtime_root', None):
+        extra_args = ['--portable', '--portable-root', str(Path(args.runtime_root).resolve())]
     app = SimulationApp({'headless':not args.gui, 'width':1920, 'height':1080,
                          'renderer':'RayTracedLighting', 'anti_aliasing':2,
-                         'multi_gpu':False})
+                         'multi_gpu':False, 'extra_args':extra_args})
     try:
         import numpy as np
         from scipy.spatial.transform import Rotation
@@ -32,7 +61,7 @@ def run(args):
         from .policy import plan
 
         out=Path(args.output).resolve();out.mkdir(parents=True,exist_ok=False)
-        memory=json.loads(Path(args.memory).read_text())
+        memory=json.loads(Path(args.memory).read_text()) if args.memory else None
         spec=layout(args.seed)
         atomic_json(out/'layout.json',spec)
         world=World(stage_units_in_meters=1.,physics_dt=1/60,rendering_dt=1/60)
@@ -93,20 +122,30 @@ def run(args):
                 poses[path]=[p.tolist() for p in body.get_world_pose()]
             return poses
         for _ in range(90):world.step(render=True)
+        rgb,depth,presentation,sensor_warmup=initial_sensor_frames(world,overhead,view)
         stage.GetRootLayer().Export(str(out/'scene.usda'))
-        Image.fromarray(view.get_rgba()[...,:3].astype('uint8')).save(out/'overview.png')
-        rgb=overhead.get_rgba();depth=overhead.get_depth()
-        if rgb is None or depth is None:raise RuntimeError('RGB-D camera did not initialize')
+        Image.fromarray(presentation[...,:3].astype('uint8')).save(out/'overview.png')
         Image.fromarray(rgb[...,:3].astype('uint8')).save(out/'observation.png')
         np.save(out/'depth.npy',depth,allow_pickle=False)
         atomic_json(out/'camera.json',dict(intrinsics=overhead.get_intrinsics_matrix().tolist(),
             world_to_optical=overhead.get_view_matrix_ros().tolist(),depth_source='rendered distance_to_image_plane',
-            physics_hz=60,render_hz=60,video_hz=20,
+            physics_hz=60,render_hz=60,video_hz=20,sensor_warmup=sensor_warmup,
             presentation={'resolution':[1920,1080],'intrinsics':view.get_intrinsics_matrix().tolist(),
                           'world_to_optical':view.get_view_matrix_ros().tolist()}))
         public=detect(rgb,depth,overhead.get_world_points_from_image_coords)
         atomic_json(out/'public-observation.json',public)
-        instructions=plan(public,memory);atomic_json(out/'plan.json',instructions)
+        if getattr(args, 'bridge', None):
+            # Reset is complete before the parent runtime dispatches System 1's
+            # macro action. Simulator object state never enters this message.
+            from .trial_bridge import receive_plan
+            request=receive_plan(Path(args.bridge), dict(public_observation=public,
+                joint_positions=robot.get_joint_positions().tolist()), timeout=120)
+            memory=request['memory'];instructions=request['plan']
+            if instructions != plan(public,memory):
+                raise ValueError('Dispatched plan differs from the public observation and memory')
+        else:
+            instructions=plan(public,memory)
+        atomic_json(out/'plan.json',instructions)
         controller=PickPlaceController(name='sample_transfer',gripper=robot.gripper,
             robot_articulation=robot,end_effector_initial_height=instructions['transit_height_m'],
             events_dt=[.008,.005,.05,.01,.005,.005,.005,.01,.008,.008])
@@ -117,16 +156,25 @@ def run(args):
             public_inputs=['RGB','rendered metric depth','camera calibration','joint state'],
             runtime='Isaac Sim 5.1',scene='procedurally built lab',external_asset_closure_attested=False))
         start=time.monotonic();trace=[];done_at=None
+        public_trace=[dict(observation=dict(public_observation=public,
+            joint_positions=robot.get_joint_positions().tolist()))]
         with imageio.get_writer(out/'episode.mp4',fps=20,codec='libx264',quality=7,macro_block_size=8) as video:
             for step in range(2400):
                 if time.monotonic()-start>600:raise TimeoutError('Native episode wall-time limit')
+                applied={'kind':'hold'}
                 if not controller.is_done():
                     action=controller.forward(picking_position=np.array(instructions['pick']),
                         placing_position=np.array(instructions['place']),current_joint_positions=robot.get_joint_positions(),
                         end_effector_offset=np.array([0.,0.,.005]))
                     articulation.apply_action(action)
+                    applied={'kind':'joint_targets', **{name:np.asarray(getattr(action,name)).tolist()
+                        for name in ('joint_positions','joint_velocities','joint_efforts','joint_indices')
+                        if getattr(action,name,None) is not None}}
                 elif done_at is None:done_at=step
                 world.step(render=True)
+                public_trace.append(dict(step=step, action=applied,
+                    observation=dict(joint_positions=robot.get_joint_positions().tolist()),
+                    phase=int(controller.get_current_event())))
                 if step%3==0:
                     frame=view.get_rgba()
                     if frame is not None and frame.size:video.append_data(frame[...,:3].astype('uint8'))
@@ -142,9 +190,12 @@ def run(args):
         if not controller.is_done():verdict['success']=False;verdict['checks']['controller_completed']=False
         Image.fromarray(view.get_rgba()[...,:3].astype('uint8')).save(out/'final.png')
         atomic_json(out/'trajectory.json',trace);atomic_json(out/'private-evaluation.json',measured)
+        atomic_json(out/'public-rollout.json',public_trace)
         result=dict(state='completed',**verdict,seed=args.seed,layout_sha256=digest(spec),
             public_observation=public,memory=memory,elapsed_seconds=time.monotonic()-start,
             video='episode.mp4',physics_steps=step+1,backend='isaacsim-5.1',
+            runtime_version=runtime_version,
+            controller_completed=bool(controller.is_done()),
             evidence={str(p.relative_to(out)):file_digest(p) for p in out.rglob('*') if p.is_file()})
         atomic_json(out/'result.json',result)
         print(json.dumps({'success':verdict['success'],'output':str(out),'checks':verdict['checks']}),flush=True)
@@ -159,7 +210,11 @@ def run(args):
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--seed',type=int,required=True)
-    p.add_argument('--memory',required=True);p.add_argument('--output',required=True);p.add_argument('--gui',action='store_true')
-    run(p.parse_args())
+    p.add_argument('--memory');p.add_argument('--output',required=True);p.add_argument('--gui',action='store_true')
+    p.add_argument('--bridge',help='Owned Trial IPC directory; wait for a plan after sensor reset')
+    p.add_argument('--runtime-root',help='Owned Kit portable data/cache/log directory')
+    args=p.parse_args()
+    if bool(args.memory)==bool(args.bridge):p.error('Use exactly one of --memory or --bridge')
+    run(args)
 
 if __name__=='__main__':main()

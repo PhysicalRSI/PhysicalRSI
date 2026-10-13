@@ -264,11 +264,15 @@ class MemoryBoundSuite:
         self.suite, self.gate = suite, gate
 
     def identity(self):
-        return dict(kind="memory-bound-suite/v1", suite=self.suite.identity(), memory=self.gate.identity())
+        from ..experiments import trial_factory_kind
+        return dict(kind="memory-bound-suite/v1", suite=self.suite.identity(), memory=self.gate.identity(),
+                    trial_factory=trial_factory_kind(self.suite))
 
     def policy_identity(self):
         from .bindings import policy_identity
+        from ..experiments import trial_factory_kind
         return dict(kind="memory-bound-suite-policy/v1", suite=policy_identity(self.suite),
+                    trial_factory=trial_factory_kind(self.suite),
                     memory=self.gate.policy_identity())
 
     def register_round(self, state, round_identity, *, context=None):
@@ -301,6 +305,10 @@ class MemoryBoundSuite:
 
     def environment(self, task):
         return self.suite.environment(task)
+
+    def trial(self, candidate, task):
+        from ..experiments import trial_adapters
+        return trial_adapters(self.suite, candidate, task)
 
     def policy(self, candidate, task):
         return self.suite.policy(candidate, task)

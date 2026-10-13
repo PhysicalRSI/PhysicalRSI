@@ -14,7 +14,11 @@ def test_three_rounds_learn_across_distinct_task_contracts_and_resume(tmp_path):
     result = campaign.run(initial)
     assert result["completed_rounds"] == 3 and result["qualification"] is None
     assert [row["outcome"] for row in result["rounds"]] == ["retain_parent", "inherit_child", "retain_parent"]
-    assert result["rounds"][0]["parent_revision"] == result["rounds"][0]["result_revision"]
+    first = result["rounds"][0]
+    assert first["parent_revision"] != first["result_revision"]
+    assessed = campaign.state.read(first["result_revision"])
+    assert assessed["action"] == "assessment"
+    assert assessed["harness"] == campaign.state.read(first["parent_revision"])["harness"]
     assert result["rounds"][0]["parent_memory"] != result["rounds"][0]["result_memory"]
     assert quota.status()["reserved_trials"] == len(suite.resets) == 30
     for index in range(3):

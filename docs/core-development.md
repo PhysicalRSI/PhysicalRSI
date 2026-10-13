@@ -1,0 +1,999 @@
+# PhysicalRSI core development
+
+The objective is a task-independent substrate for recursive self-improvement:
+System 1 executes an explicitly versioned state; System 2 learns from measured
+rollouts, creates candidates and selects with independent evidence. Interface
+existence alone does not establish an effective improvement algorithm.
+
+## Priorities and acceptance criteria
+
+| Priority | Deliverable | Required evidence | Current boundary |
+| --- | --- | --- | --- |
+| P0 | Evolvable state, common Trial/Evaluation, reliable rollback | Fixed components rejected before evaluation and at commit; raw rollout attribution; recover from damaged active artifacts; restart without repeated effects | Implemented for local files and the existing experiment runtime; provider-owned assets still require provider recovery |
+| P0 | Rollout-driven Self-Harness evolution | Changed proposals respond to observed transitions; fresh validation; independent final tests; cross-task integration; comparison with frozen/search controls on a native workload | CPU numerical and policy-gradient improvement across two action contracts and local native bounded-control improvement measured; native learned improvement, broad transfer and physical qualification remain unproven |
+| P1 | Candidate archive, asynchronous multi-fidelity evaluation and scheduling | Losing but useful branches remain retrievable; each fidelity has a distinct protocol; out-of-order completion cannot promote against a stale parent; resource reservations reconcile after worker loss | Owned branches, local asynchronous scheduling and development/full evaluation stages implemented; one bounded native staged study completed, while distributed resource backends remain unproven |
+| P1 | Experience-to-skill compilation and versioned memory | Compiler binds development evidence to a skill's preconditions, implementation and checks; transfer succeeds on a second task; contradicted lessons suspend a skill revision | Owned experience, checked compilation, pinned runtime binding and memory suspension implemented; local transfer between two action contracts measured, broad/native transfer unproven |
+| P2 | Harness Tree, capability routing and retention | Select specialized branches by declared capability; evaluate unseen scenario shifts; retain old capability scores under a shared cost budget | Owned trees, public-observation routing and historical score floors implemented; local four-capability study measured, native and open-world scenario shifts remain unproven |
+| P2 | Optional RL/checkpoint evolver | External training job has resumable receipts; checkpoint is content-addressed; evaluation and rollback bind its complete dependencies; ordinary harness updates need no training backend | Explicit checkpoint transitions and durable provider jobs implemented; two CPU policy-gradient updates measured; native/GPU framework adapters and broad learned transfer remain unproven |
+
+The selected native acceptance task is Isaac automatic engineering. The
+`auto-engineering --core-research` path connects its real worker to the common
+Trial/Evaluation contracts. Its default bounded clearance repair is a control
+algorithm; acceptance of a non-scripted proposal provider remains separate work.
+P1 archive/scheduler work must preserve the same state, trial and evidence
+identities. It must not turn partial or low-fidelity scores into full promotion
+evidence. P2 training stays optional and must not become a core import dependency.
+
+## Reference decisions
+
+These are design references, not dependencies or claims of reproduced results:
+
+- [A-Evolve](https://github.com/A-EVO-Lab/a-evolve) exposes an agent workspace,
+  evolution engines, trial execution and version control. PhysicalRSI keeps
+  component mutation boundaries explicit and versions declared files locally.
+- [GEPA's adapter](https://github.com/gepa-ai/gepa/blob/main/src/gepa/core/adapter.py)
+  separates evaluation batches, trajectories and reflective dataset construction.
+  PhysicalRSI exposes verified rollouts to a replaceable evolver and keeps
+  uncertain/invalid physical outcomes separate from task failures.
+- [DGM's outer loop](https://github.com/jennyzzt/dgm/blob/main/DGM_outer.py)
+  samples parents from an archive and supports staged evaluation. Its archive
+  is the reference for P1 branch retention; a selected-version snapshot alone
+  is not an evolutionary candidate archive.
+- [OpenEvolve](https://github.com/algorithmicsuperintelligence/openevolve) and
+  [RLinf](https://github.com/RLinf/RLinf) inform the separate search and execution
+  scheduling layers. PhysicalRSI's trial-count quota does not yet schedule GPUs,
+  tokens, model servers or asynchronous simulation workers.
+- [Evo-Harness](https://arxiv.org/abs/2608.15071) studies compilation of execution
+  context into reusable skills. [Hermes](https://github.com/NousResearch/hermes-agent)
+  is a reference for persistent agent memory and skills. P1 needs executable,
+  evidence-bound transfer, beyond saving textual lessons.
+- [Adaptive Auto-Harness](https://arxiv.org/abs/2606.01770) motivates a harness
+  tree and solve-time routing for changing task streams.
+- [Agent Lightning](https://github.com/microsoft/agent-lightning) and RLinf
+  inform optional training adapters. Neither is installed or invoked by this
+  implementation.
+
+## Evolvable state and version recovery
+
+`self_harness.artifacts.EvolutionSpec` declares mutable components before any
+proposal. The closure includes foundation, skill selection, skills, tools,
+control, prompts, memory rules/content, dependencies, weights, assets and
+configuration. It binds file identities, not informal change descriptions.
+
+```python
+from PhysicalRSI_core.self_harness.artifacts import EvolutionSpec
+
+evolution = EvolutionSpec(("control", "prompts", "skills", "memory_rules"))
+# Pass evolution=evolution to SelfHarness(...).
+```
+
+The default allows harness components except foundation and weights. The
+specification is part of both the frozen round and the stable campaign policy.
+Self-Harness checks actual component differences before admission; lineage
+checks again before inheritance. The separate `CheckpointEvolutionSpec` below
+defines a model transition contract; ordinary evolution keeps weights frozen.
+
+New `HarnessState` bootstrap and selection records own a snapshot under
+`state/snapshots/<content hash>/`. Files are copied, not hard-linked. Snapshot
+publication verifies content, synchronizes files/directories and atomically
+renames the completed directory before the lineage pointer advances. Existing
+snapshots are checked and never silently overwritten. Historical records with
+external roots remain readable under their original integrity checks.
+
+A completed paired comparison that retains its parent publishes an `assessment`
+lineage record. It advances the CAS revision and binds the full decision and
+evidence while preserving the same harness snapshot and `freeze_sha256`.
+An inherited candidate publishes a `selection` record. Consumers must distinguish
+an artifact revision from a lineage revision: a changed lineage head may record
+new observations without changing the executing controller. Publication recovery
+reuses the exact assessment after interruption and does not rerun completed trials.
+No-candidate and all-admission-rejected rounds have no complete paired scores;
+they retain their ordinary campaign/archive receipts without an assessment.
+
+```python
+restored = state.rollback(
+    expected=current_revision,
+    target=known_good_revision,  # Omit to select the previous generation.
+    reason="position error regressed in deployment",
+)
+```
+
+Rollback verifies the current history record and ancestry without requiring
+the damaged active files to pass. The target still requires complete file and
+evidence verification. It records a new CAS revision and reason; retrying the
+same completed rollback is idempotent. Consecutive rollbacks step through
+selected generations rather than toggling back to a broken revision. Default
+rollback skips assessment records for the unchanged active artifact. An explicit
+target can still name an audited ancestor. Assessment records do not turn a
+bootstrap into a promoted policy or upgrade an offline qualification to physical.
+
+A rollback changes the lineage head, not a running controller or a completed
+research campaign cursor. Restart/reload the controller at its declared episode
+boundary. An existing campaign rejects that external head change; start a new
+campaign with the restored harness and an explicitly chosen research-memory
+revision. Rolling back research knowledge is a separate decision from restoring
+System 1 behavior.
+
+`state.history(revision)` returns the audited ancestry, newest first. It checks
+each record's content address and each declared evidence hash. Shared snapshots
+and evidence paths are read once within this call, while every declaration is
+compared against the checked content. The retention selector uses this read to
+construct its capability floors. The next read starts a new audit; matching
+file size or modification time never substitutes for checking bytes. Returned
+records describe the files checked during that audit, not a lock on a changing
+filesystem.
+
+Rollback alone does not repair a damaged historical snapshot. Retention checks
+still audit that ancestor, and ordinary snapshot capture rejects a damaged
+directory even when a newly proposed candidate has the same content hash.
+`HarnessState.restore_snapshot` explicitly restores the original declared bytes
+from an independently verified replica, such as a candidate archive snapshot:
+
+```python
+repair = state.restore_snapshot(
+    expected=restored["revision"],  # CAS against the current head after rollback.
+    revision=damaged_revision,     # Must be the current revision or an ancestor.
+    source=verified_archive_candidate["harness"],
+    reason="restore exact original bytes from the candidate archive",
+)
+```
+
+The operation requires an owned snapshot and exactly matching component hashes.
+It copies and verifies the replacement, records the request and preparation,
+moves damaged bytes into `state/snapshot-repairs/<request hash>/quarantine/`,
+and publishes the original snapshot path. A completion receipt binds the target,
+reason, implementation and quarantine inventory. A missing snapshot has no bytes
+to quarantine. A healthy snapshot records a no-op without requiring source bytes.
+Retry the identical request after interruption; once preparation is recorded,
+the staged copy is sufficient even if the original replica is unavailable.
+Completed retries verify the snapshot and repair evidence without copying again.
+Changed quarantine bytes or a newly damaged destination require reconciliation.
+
+Restoration preserves both the lineage head and artifact hash. It neither
+reselects a policy nor resumes a completed campaign. A subsequent explicit
+Self-Harness round must use fresh validation cases and retain the existing
+capability floors. The regression study grows a four-task tree, corrupts its
+selected snapshot, rolls back, restores it from the archive, and independently
+reevaluates the same artifact in a new round. Historical trial evidence remains
+mandatory; restoring harness files cannot repair missing or changed evaluations.
+Quiesce affected readers at their declared boundary before maintenance; the two
+directory renames are journaled for recovery, not atomic for running readers.
+
+Snapshot scope is declared local files. Referenced checkpoints, providers and
+external asset manifests still need their own retention policy. Selection
+evidence remains in the experiment workspace and must be retained. Corrupt
+history metadata, a corrupt current pointer or missing target evidence require
+separate recovery. This is a cooperating-process POSIX store, not a sandbox or
+a distributed controller fence.
+
+## Common Trial and Evaluation
+
+`trials.Trial` freezes task, public case, scope, budget and optional System 2
+candidate/split attribution in `physicalrsi.trial/v1`. `trials.Evaluation` reads
+verified runtime receipts into `physicalrsi.evaluation/v1`, including reset,
+actual observation/action trajectory, verdict, measurements and evidence hashes.
+Returned JSON is a copy; caller mutation cannot alter an existing value.
+
+An environment may implement `export_evidence()` to return a mapping from
+relative artifact names to `{path, sha256}`. Before publishing completion the
+runtime copies those declared bytes into the trial's `artifacts/` directory,
+checks the expected hashes, and binds `artifacts.json` and every copied file
+to the receipt. Subsequent reads check all artifacts. Source deletion does not
+remove retained evidence; an interrupted copy requires reconciliation. This
+interface does not retain undeclared dependencies or referenced external assets.
+
+```python
+from tempfile import TemporaryDirectory
+from PhysicalRSI_core.experiments import Budget, ExperimentRuntime
+from PhysicalRSI_core.trials import Trial
+from PhysicalRSI_demos.experiment import CounterEnvironment, CounterPolicy, CounterVerifier
+
+with TemporaryDirectory(prefix="physicalrsi-trial-") as workspace:
+    trial = Trial("counter-1", task="counter", case={"initial": 0, "target": 3},
+                  scope="software", budget=Budget(5, 30))
+    result = ExperimentRuntime(workspace).evaluate(
+        trial, environment=CounterEnvironment(), policy=CounterPolicy(2),
+        verifier=CounterVerifier())
+    print(result.outcome)  # failure: measured position 4 differs from target 3
+    print(result.to_dict()["trajectory"])
+```
+
+The legacy `ExperimentRuntime.run(...)` remains the execution implementation;
+`run_trial(...)` invokes that same path. Development and paired validation use
+the common contracts. Unknown effects still require reconciliation; a common
+interface does not authorize retries. Success, failure, uncertain and invalid
+remain distinct. Final tests remain report-only.
+
+The Trial runtime and `ExperimentEvaluator` share `runtime_implementation()`,
+an explicit hash map of their owned execution dependencies: runtime, contracts,
+Trial types, artifact capture, evidence reading, embodiment, timing, device
+ownership and storage. The evaluator additionally binds its own planning,
+scoring, rollout and harness-artifact code. Every identity check reads current
+source bytes; changing a helper cannot preserve the old evaluator revision.
+A change before reservation blocks the whole plan; a change during adapter
+construction blocks reset while retaining the already charged reservation.
+
+This versions the declared execution implementation, not external Python,
+simulator, model-server or asset dependencies. It is a trusted source contract,
+not attestation of loaded machine code or a malicious-process sandbox. A new
+implementation requires a new frozen campaign; ordinary `Evaluation.read()` can
+still inspect completed historical evidence without executing adapters or
+silently migrating its evaluator identity. Source-mutation tests run in isolated
+copies and never edit an active experiment's implementation.
+
+New evaluator cohorts declare `case_identity: task-case/v1` and hash the task
+with its public case. Different task domains can use the same seed or payload
+without colliding. Within-task duplicates and semantic reset reuse remain
+rejected. The result bridge still reads legacy unqualified `case/v1` cohorts.
+Task names must represent actual task domains; renaming one task does not make
+its examples statistically independent or justify reusing its validation data.
+
+## Rollout-driven proposals
+
+`self_harness.rollout.RolloutProposer(evaluator, evolver)` obtains development
+trials from `ExperimentEvaluator`. Before calling the evolver it rehydrates
+each receipt, verifies the candidate and split, checks every evidence hash,
+and requires complete coverage of the frozen development plan. It rejects
+altered traces, substituted outcomes, duplicate trials and omitted episodes.
+The evolver receives `propose(parent, evaluations, context, output)` and returns
+materialized candidates with the existing Self-Harness provenance. The parent
+and evidence are rechecked after the call. Interrupted proposal calls require
+the provider's explicit `resume_proposal(...)` reconciliation implementation.
+
+The CPU example estimates actuator response with least squares from actions
+and measured position changes. The same algorithm updates a scalar command
+task and a structured joint-command task. It evaluates new target positions,
+inherits the accepted controller, then uses that controller in the next round.
+An independent final test uses targets absent from development and validation.
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python - <<'PY'
+from tempfile import TemporaryDirectory
+from PhysicalRSI_demos.rollout_evolution import run
+with TemporaryDirectory(prefix="physicalrsi-rollout-") as workspace:
+    result = run(workspace)
+    print([row["outcome"] for row in result["rounds"]])
+    print(result["final_test"]["metrics"])
+    print(result["quota"])
+PY
+```
+
+Expected decisions are `inherit_child`, then `no_changed_candidate`. Each of
+the two final cases succeeds; the complete run reserves 14 trials. Reopening
+the same workspace verifies receipts without more environment calls. The
+tests also change the hidden dynamics and require correspondingly different
+fitted controls, avoiding a preconfigured corrective parameter.
+
+## Candidate branches and search history
+
+`self_harness.archive.CandidateArchive` owns every candidate in a completed
+round, including admission rejections and evaluated candidates that did not
+win. Each immutable entry binds the parent and resulting lineage revisions,
+search policy, admission reasons, per-task measurements and selection decision.
+Candidate files are copied into content-addressed snapshots. Declared raw
+development and validation evidence, including binary media, is copied into
+the archive. Reads verify the entire retained closure, including ancestor
+entries referenced by frozen search views. Missing or corrupted historical
+evidence invalidates dependent entries. Published entries are never repaired
+silently from potentially changed sources.
+
+Each archive read traverses an ancestor only once and shares verification of
+identical owned snapshots within that traversal. `fork` uses one audited view
+for its source and ancestry before copying the branch. This reuse does not span
+public calls, provider execution or separate reads. Historical search views are
+parsed from the exact bytes whose hashes were verified; the entry's publication
+record is checked again after reading its evidence. Directory enumeration rejects
+links and non-regular files, including undeclared FIFOs. The archive identity pins
+the snapshot and file-enumeration helpers as well as its own implementation.
+Existing frozen studies must be inspected with their recorded source version.
+
+Pass the same archive to `SelfHarness(..., archive=archive)` and
+`RolloutProposer(evaluator, evolver, archive=archive)`. Keep its directory
+outside all campaign round evidence. The rollout-calibration and native Isaac
+research adapters enable an archive at `<workspace>/archive`.
+
+Before development, Self-Harness freezes `archive-view.json` for the declared
+scope and search policy. The proposer receives that view and candidate
+summaries through the optional evolver method
+`propose_from_archive(parent, evaluations, research_context, search_context, output)`.
+The existing research context remains unchanged; `search_context` contains
+`view` and `candidates`. Interrupted calls need the matching
+`resume_proposal_from_archive` method. Providers using ordinary `propose`
+continue to receive development evaluations and their original context.
+Later entries cannot enter a resumed proposal. Archive summaries are historical observations across cohorts, not
+fresh promotion scores. Preregistered test payloads and final-test reports
+are excluded from archive evidence. Providers remain trusted code rather
+than processes isolated from other files on the host.
+
+`archive.fork(view, revision, candidate_id, parent=..., output=..., name=...,
+evolution=...)` copies an old branch into a new proposal directory. It binds
+the current parent, the archived source and the frozen view; fixed components
+remain protected. A research proposer must add its hypothesis, expected effect
+and required checks, and update component hashes after any further edits.
+The proposal then follows ordinary admission, a fresh paired comparison and
+CAS selection. Retrieving or materializing a branch never changes the head.
+
+Publication is idempotent. If selection finishes before archive publication
+is interrupted, a resumed round completes the archive without repeating
+rollouts. Campaign restarts also verify archived files. Incomplete rounds and
+stale-parent comparisons remain in their original workspaces for recovery;
+this archive is not an asynchronous job ledger. Archive retention can recover
+candidate files and historical observations after source loss, but it does
+not replace the original lineage/campaign store or its recovery procedure.
+External assets referenced by manifests still belong to their providers.
+
+The CPU branch example deliberately searches individual task repairs in round
+one. The vector specialist wins the weighted comparison; the axis specialist
+remains archived. Round two retrieves the losing axis branch and combines it
+with the incumbent's successful vector control. Fresh validation selects the
+composed candidate; separate tests cover both action contracts.
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python - <<'PY'
+from tempfile import TemporaryDirectory
+from PhysicalRSI_demos.branch_evolution import run
+with TemporaryDirectory(prefix="physicalrsi-branches-") as workspace:
+    result = run(workspace)
+    print([row["outcome"] for row in result["rounds"]])
+    print(result["final_test"]["metrics"])
+    print(result["quota"])
+PY
+```
+
+Expected: two `inherit_child` decisions, both final test cases successful, and
+26 reserved trials. This verifies branch retention and reuse on actual CPU
+transitions, not an optimal search algorithm or OpenEvolve/DGM reproduction.
+The following evaluation stages extend this same candidate and evidence path.
+
+## Asynchronous evaluation and fidelity stages
+
+The scheduler owns JSON snapshots of submitted requests and each callback's
+returned value. A collector that updates a provider's shared cache cannot
+retroactively change what `execute()` returned. Equality uses canonical JSON
+hashes, matching durable result identity; Python's equality between `True` and
+`1` is insufficient. Resource requests are copied before validation and handler
+callbacks. Every execution or collection checks the handler identity on both
+sides, including recovery and reads of already completed jobs. A changed
+collector cannot return evidence under an old handler revision or cause pending
+jobs to be dispatched first.
+
+Execution/collection disagreement leaves the job in `needs_reconciliation` and
+keeps its reservation. Verified complete evidence may recover it without a new
+execution. A failed read of a completed job preserves its original receipt.
+Snapshots do not make a provider's `collect()` side-effect-free; the provider
+still owns that contract and the completeness of its evidence checks.
+
+`infra.scheduler.JobScheduler` persists queued inputs, verified results and
+resource reservations outside campaign evidence. `submit` is idempotent for
+identical payloads, handler identities and resource requests. `work_once` lets
+independent cooperating local processes claim fitting work; `run_until` provides
+a bounded thread dispatcher and returns verified results in requested order.
+Higher numeric priorities dispatch first among requests that fit. A large
+blocked request does not prevent smaller fitting requests from running.
+
+Configure capacities explicitly, such as `{"cpu": 2}`. These are scheduling
+allowances, not inferred hardware capacity, enforced memory limits or cluster
+allocations. All cooperating controllers must share one queue on one POSIX
+host. Suite factories must create independent adapters and support concurrent
+calls. Physical device ownership still requires the runtime's `DeviceRegistry`;
+a queue reservation does not replace its leases or native cleanup.
+
+A job's owner lock and durable state are distinct. A dead worker retains its
+capacity and cannot be retried automatically. `recover_completed` invokes only
+the handler's read-only `collect`: all required trial receipts and evidence
+must already exist. Successful recovery releases the reservation without new
+rollouts. Partial effects remain unresolved. `abandon` requires an operator,
+reason and hashed quiescence evidence; it releases queue capacity while retaining
+the failed input and does not clear a device lease or authorize replay. Live
+owners cannot be recovered or abandoned. Observation timeouts do not expire
+ownership; owned threads are joined before the dispatcher returns, so adapters
+must honor their own execution budgets.
+
+`self_harness.scheduled.ScheduledEvaluator` adds the optional
+`evaluate_pool`/`resume_evaluation_pool` port to `ExperimentEvaluator`. The
+complete paired pool is reserved before dispatch. Candidate comparisons can
+finish out of order, but every candidate still receives its own verified
+evaluation receipt. Missing, uncertain or changed evidence prevents selection;
+lineage CAS rejects completion against an outdated parent revision. Completed
+queue receipts are rechecked against raw trials when reused.
+
+`self_harness.fidelity.MultiFidelityEvaluator` adds one development screening
+stage before full validation. Both stages share the preregistered case splits
+and trial quota, and have distinct evaluator/System 2 identities. The cheap
+stage runs all ordinarily admitted children on development cases, using its
+declared adapters and budgets. It requires the frozen minimum success rate on
+every task. The incumbent remains available for full paired comparison and is
+recorded as `measured: false, per_task: null` at screening. No measurement is
+invented or reused for it. Set `screen_incumbent=True` to measure the entire
+pool for diagnostics; this policy is frozen before effects. An uncertain
+screening outcome blocks full dispatch.
+
+Only children passing screening enter the frozen full pool, whose independent
+validation cases are then generated. Cheap scores never become promotion
+scores. This implementation supports development screening followed by full
+validation; arbitrary fidelity ladders and adaptive allocation policies are
+future work. Screening decisions, rejected candidate snapshots and declared raw
+evidence remain in `CandidateArchive`, with screening measurements separate
+from full validation metrics. Test cases stay report-only.
+
+The CPU acceptance example compares the same five-member proposal pool under
+three screening policies:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python - <<'PY'
+from tempfile import TemporaryDirectory
+from PhysicalRSI_demos.staged_evolution import run
+for screened, screen_incumbent in ((False, False), (True, True), (True, False)):
+    with TemporaryDirectory(prefix="physicalrsi-stages-") as workspace:
+        result = run(workspace, screened=screened, screen_incumbent=screen_incumbent)
+        print(screened, screen_incumbent, result["quota"], result["final_test"]["metrics"])
+PY
+```
+
+Expected: 26 total reserved trials without screening, 24 with the entire pool
+screened, and 22 with the default children-only screening, including development
+and the two report-only tests. All three select the fitted calibration and
+succeed on the scalar and structured action tests. Skipping the incumbent's
+redundant screening saves two trials while preserving its full paired scores.
+Three
+overcorrections are deliberately included to exercise rejection; this small
+software example does not establish general screening efficiency or native
+simulator performance. Process-exit tests additionally cover retained uncertain
+reservations, complete-evidence recovery and live-owner protection.
+
+## Compiled skills and versioned memory
+
+`self_harness.skill_compiler.ExperienceArchive` accepts the same verified
+development feedback used by `RolloutProposer`. It independently retains the
+source harness, complete trial receipts and declared evidence files, including
+binary artifacts. Reads reconstruct `Evaluation` values from those owned files
+and verify their candidate, task, split and plan attribution. Compilation can
+continue after the original experiment workspace has been removed; test and
+validation results cannot be substituted for development inputs.
+
+`ExperienceCompiler` separates three explicit provider responsibilities:
+
+- A compiler materializes an executable file bundle from owned evaluations and
+  a frozen request containing the skill name, applicability conditions and
+  required checks. It declares the exact file closure and a testable hypothesis.
+- A backend builds a typed `Operation` from that bundle. It is selected by the
+  caller and pinned by identity; memory cannot name an import or select code to
+  execute. The provider owns review, dependency completeness and any necessary
+  process isolation.
+- A checker actually exercises that operation and binds each required report
+  to source trial identities. A failed check preserves its report without
+  publishing an eligible skill. Trusted checkers still own scientific validity;
+  a passing offline check does not establish transfer or deployment success.
+
+`compile` records materialization and checking separately. Interrupted provider
+calls require `resume_compile` or `resume_check`; source files and provider
+identities are checked again before publication. Published skills bind the
+owned experience, compiler/backend/checker identities, operation contracts,
+applicability conditions and check results. `infra.owned_files.OwnedFiles`
+publishes metadata and copied files atomically and rejects changed, missing,
+extra or linked files. It never repairs a published version silently.
+
+`skills.SkillLibrary.materialize` copies a skill package into a candidate's
+declared `skills` component. `bind` requires an explicit memory revision,
+lesson ID, applicability context and matching backend. It verifies evidence
+and contracts before construction, and checks the pinned memory and executable
+files on invocation. Source evidence is fully audited at binding rather than
+replayed on every action. Retain the library and research memory stores alongside
+lineage: the candidate owns its executable copy, while those stores retain its
+provenance and lesson history. Provider-owned external assets are not copied
+implicitly.
+
+`install` creates a new `ResearchMemory` snapshot without replacing prior
+lessons. A lesson marked active is eligible for an experiment; normal
+Self-Harness admission, independent paired validation and CAS still select the
+runtime harness. System 1 declares both the skill revision and the memory
+revision in its dependencies. `suspend` accepts only a definite failed
+development trial whose execution binding names that exact skill and memory.
+The new memory revision retains the supporting and contradicting evidence.
+Prose refinement alone cannot re-enable the contradicted executable: recompile
+and install a new skill revision under a new lesson ID. Historical memory
+snapshots remain unchanged. Suspension blocks bindings using the new snapshot;
+it does not silently mutate already pinned historical executions or stop a
+robot. Runtime withdrawal requires an explicit state transition or rollback.
+
+The CPU acceptance example learns an inverse response from two scalar-axis
+rollouts, compiles a vector action program and installs its skill lesson. The
+target Self-Harness uses that same program for scalar and structured vector
+actions, with explicit shape adapters and unchanged baseline control files.
+No target-task, validation or test trajectories enter compilation. After
+selection and separate final tests, a new development-only dynamics shift
+provides a counterexample. The example suspends the lesson, rolls back the
+selected harness, and executes a further trial without the withdrawn skill.
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python - <<'PY'
+from tempfile import TemporaryDirectory
+from PhysicalRSI_demos.skill_transfer import run
+with TemporaryDirectory(prefix="physicalrsi-skill-transfer-") as workspace:
+    result = run(workspace)
+    print(result["final_test"]["metrics"])
+    print(result["quota"])
+    print(result["restored"]["harness"]["id"])
+    assert run(workspace) == result
+PY
+```
+
+Expected: one successful report-only test per action contract, 18 total trials,
+and rollback to `uncompiled`. The post-withdrawal trial still fails on the
+changed dynamics; withdrawal is not presented as a repaired controller.
+Completed studies audit their retained files on restart. A crash after rollback
+can finish the pending withdrawal report without repeating earlier trials.
+Tests also compile a distinct revision from the counterexample and preserve the
+old suspended lesson. That revision remains a candidate requiring fresh
+validation. These results demonstrate local transfer within one linear actuator
+family, not transfer between unrelated robot tasks or learned model checkpoints.
+
+## Harness Tree and capability retention
+
+`harness_tree.HarnessTree` packages several complete harnesses into one normal
+Self-Harness candidate. Each node has a parent, exact capability conditions and
+a full component declaration. The root is the unconditional fallback. Children
+must strictly narrow their parent's conditions; overlapping siblings, cycles,
+unknown capability keys and disconnected nodes are rejected. Trees are bounded
+to 64 nodes and depth 16. Routing chooses the deepest matching node without a
+priority heuristic or reading evaluation scores.
+
+Packaging copies bytes into content-addressed objects and records the original
+logical file names separately for every component. Identical component manifests
+are shared. A branch's foundation and weights must match the root; its other
+changes must obey the declared `EvolutionSpec`. The resulting tree declares all
+objects and manifests in their original components, with routing in
+`skill_selection`. This allows ordinary component comparison to reject a hidden
+model, tool or configuration change, including a renamed logical input. Adding
+a control branch does not invent changes to unchanged foundation files.
+`materialize` reconstructs each branch's original file layout for an explicitly
+supplied backend. Neither publication nor branch membership authorizes deployment.
+
+`RoutedPolicy` is a System 1 adapter. Its backend builds declared branch policies
+without starting workers; a separately pinned extractor receives only the
+initial public observation. Core supplies the task identity. All possible
+branches for that task must agree on observation/action contracts and timing.
+The wrapper declares their versioned dependencies and the whole-tree revision,
+pins one route for the episode, passes the selected leaf its own revision, and
+delegates cleanup only to that leaf. Cleanup uses the originally bound method
+and revision even when an integrity failure prevents any further action.
+Provider constructors and extractors remain
+trusted code; routing is not a sandbox or an automatic contract converter.
+Full-tree file audits bracket execution. Per-action checks verify the routing
+manifest, selected branch files and provider identities; inactive branch bytes
+are audited before the first action and before a completed receipt is published.
+
+The experiment runtime's optional `execution_evidence()` policy port returns a
+nonempty JSON object. Its presence is frozen before reset. Evidence is written
+after `begin_episode`, before the first environment action, and collected again
+at completion. `policy-evidence.json` belongs to the Trial's verified closure,
+so archive and experience capture retain it too. Routed policies record the
+public capabilities, traversed nodes, tree revision, leaf revision and extractor
+identity. An uncertain action retains the selected-route evidence without
+authorizing a replay. Route identity does not change halfway through an episode.
+
+`self_harness.retention.RetentionSelector` wraps the existing paired selector.
+Before a research round, it freezes a view of the declared parent's audited
+lineage and the highest observed normalized score for each capability, including
+past incumbents, retained-parent assessments and selected survivors. All generations must share the scoring
+policy and task coverage. Candidate scores must pass both ordinary paired
+selection and the declared historical regression limits. This prevents a series
+of individually tolerated regressions from silently erasing an older capability.
+If the provisional winner violates a floor, selection considers the remaining
+eligible candidates; it does not deploy the violating winner. The view and
+effective floors are bound into round identities and the selection receipt.
+Lineage CAS still rejects commits against a stale parent.
+
+These floors are empirical scores, not population confidence bounds. Fresh
+paired cases, optional statistical constraints and complete coverage remain
+necessary. A previously selected parent may itself fail a historical floor on
+new cases; retaining it is not a claim that the regression has been repaired.
+Changing task meanings, score scales or the task catalogue requires an explicit
+new research policy. Keep the lineage and its evidence available when reusing
+historical retention views. This implementation does not silently relax floors,
+add new task domains to a frozen campaign, or certify unseen dynamics.
+
+The retained-observation regression study exercises the case in which no child
+is promoted in the first round. The axis controller initially scores 1.0; fresh
+second-round cases expose its limited action range and reduce its score to 0.5.
+A vector calibration deliberately applied to both action contracts improves the
+paired aggregate but still scores 0.5 on the axis task. The recorded first-round
+assessment keeps the axis floor at 1.0 and
+rejects this candidate. Discarding that assessment would lower the floor to 0.5
+and incorrectly admit it. The diagnostic tie and global application are authored
+controls; the vector coefficient is fitted from development transitions. Four
+additional diagnostic trials replay the first round's two known axis cases:
+the incumbent succeeds on both while the global repair fails both. These replays
+verify actual old-case loss, distinguish it from harder fresh cases, and never
+enter selection or proposals. They are explicitly not fresh held-out tests.
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python - <<'PY'
+from tempfile import TemporaryDirectory
+from PhysicalRSI_demos.retention_observations import run
+with TemporaryDirectory(prefix="physicalrsi-retained-observations-") as workspace:
+    result = run(workspace)
+    print([row["outcome"] for row in result["research"]["rounds"]])
+    print(result["quota"])
+    assert run(workspace) == result
+PY
+```
+
+Expected: two `retain_parent` decisions and 24 actual CPU trials: 20 for
+development/paired validation and four for post-selection known-case diagnostics.
+Both assessments and rejected
+candidates remain auditable; independent restart adds zero trials. This study
+does not repair the incumbent's range failure or run final test cases. Its
+purpose is to demonstrate that retaining a parent cannot erase an observed
+capability floor. Tests also cover interruption before/after the lineage pointer,
+the outer commit and archive receipts, stale-parent rejection and damaged
+historical evidence.
+
+The CPU study starts with one fallback controller across scalar and vector
+actions under standard and shifted actuator responses. An evolver fits only
+failed development transitions, adds a drive-specific branch, then specializes
+that branch for vector actions. The source harnesses, routing, candidate pool
+and retention policy all pass the ordinary Self-Harness path under one trial
+quota. A global repair is included as a forgetting control: it improves the
+weighted aggregate score but destroys three earlier capabilities. The historical
+gate rejects it even though the study deliberately allows ordinary per-round
+regression, isolating the contribution of the retention gate.
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python - <<'PY'
+from tempfile import TemporaryDirectory
+from PhysicalRSI_demos.harness_tree import run
+with TemporaryDirectory(prefix="physicalrsi-tree-") as workspace:
+    result = run(workspace)
+    print(result["final_test"]["metrics"])
+    print(result["quota"])
+    assert run(workspace) == result
+PY
+```
+
+Expected: two inherited tree revisions, one unchanged round, 60 trials including
+eight report-only tests, and 2/2 successes for each of four capabilities. Final
+tests use unseen target magnitudes; standard-actuator tests also use a previously
+unseen public label and exercise the fallback. This is not an unseen-physics
+result. Completed campaigns audit evidence on restart without another reset.
+The selected three-node tree and earlier two-node tree use normal snapshots and
+rollback. Native routing, broader transfer, learned capability extraction and
+open-world task-catalogue evolution remain research work.
+
+## Optional training and checkpoint evolution
+
+`checkpoints.CheckpointStore` owns content-addressed inference bundles and their
+complete declared files. Model architecture, backend identity, operation input,
+output and effects are fixed before training. `self_harness.training` provides
+`CheckpointEvolutionSpec`, `TrainingCoordinator` and `CheckpointProposer`.
+Ordinary `EvolutionSpec` still rejects weights mutations. The explicit model
+specification changes only weights; foundation, runtime control and all other
+components remain fixed. Inheritance rechecks this specification, including
+checkpoint provenance. An imported seed is not a trained update; restoring a
+verified ancestor is allowed.
+
+System 1 loads the selected inference bundle through a caller-supplied backend
+and records its checkpoint revision as a model dependency in each Trial.
+The backend must own that frozen loaded version, including any remote inference
+handle. It must not silently follow a mutable `latest` model. Full bundle bytes
+are verified at binding; core does not hash a large model at every token. These
+ports are trusted implementations, not a security sandbox or remote attestation.
+
+System 2 freezes a planner result based only on verified development Trials.
+`DevelopmentExperience` retains the parent files and complete source evidence
+independently of the original workspace; skill compilation shares this storage
+contract. Training requires every source Trial to name the exact parent model.
+A request records that experience revision, parent harness/checkpoint, fixed
+model, provider, method (`rl` or `supervised`), parameters and update/sample/time
+budget. A provider implements these explicit methods:
+
+| Port | Contract |
+| --- | --- |
+| `identity()` | Stable implementation and execution configuration |
+| `submit(request, output)` | Dispatch once and return a request-bound job handle |
+| `recover_submission(request, output)` | Read-only lookup of the original submission after a lost reply; an unknown result cannot authorize resubmission |
+| `poll(handle)` | Read-only status for that same job; terminal results require explicit quiescence |
+| `collect(handle)` | Read-only completed inference bundle, file hashes, measured costs and `training_only` metrics |
+
+Known queued/running jobs raise `TrainingPending`; the caller resumes the same
+proposal after observing progress. Unknown jobs require reconciliation.
+Submission and planner receipts prevent blind repetition. Completed checkpoints
+own the training request, job handle, terminal status, output hashes and costs.
+Reported costs must fit the frozen budget; providers enforce actual process/GPU
+limits and cancellation. Core does not infer spare cluster capacity or provision
+instances. A failed, quiescent training job produces no candidate. Training loss
+or reward never becomes fitness: every completed model is an ordinary candidate
+requiring fresh paired validation and per-task nonregression before selection.
+
+Run the standalone CPU acceptance in a new workspace:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python -m PhysicalRSI_demos.checkpoint_evolution \
+  /tmp/physicalrsi-checkpoint-study
+PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider \
+  tests/test_checkpoint_evolution.py tests/test_skill_compiler.py
+```
+
+The demo starts one local worker process over `JobScheduler` with logical CPU
+capacity one. A two-feature categorical policy samples actions on development
+targets; its worker checks behavior probabilities, recorded actions and parent
+attribution, then executes one REINFORCE gradient update per round. It learns
+the scalar action first, then the structured vector action while retaining the
+first capability. There are two training jobs and 52 CPU Trials: 32 development,
+16 paired validation and four report-only final tests. Both final tasks succeed
+on 2/2 new targets. Restart reads the same jobs and Trials; explicit lineage
+rollback restores the preceding model and its actual inference behavior.
+Fault tests cover lost replies, unknown workers with retained reservations,
+wrong attribution, damaged/missing files, exceeded budgets, and misleading
+training metrics that fail independent selection.
+
+This is a small on-policy, finite categorical model, not LLM fine-tuning,
+simulator/robot learning or a reproduced Agent Lightning/RLinf result. No training
+framework is imported by core. The first checkpoint binding is a flat model
+package; composing model updates with a Harness Tree needs its own declared
+transition and acceptance. Distributed trainers, native learned improvements,
+cross-family models and broad transfer remain separate work. Historical studies
+must use their frozen source because implementation identities are part of their
+receipts. Current source changes cannot silently resume older campaigns.
+
+## Evidence read cost and integrity
+
+Checkpoint ancestry and compiled skills may refer to many past Trials. Reopening
+each small file at every wrapper layer made shared-filesystem metadata latency
+dominate local CPU work. `ExperimentRuntime.read_evidence()` now returns the
+receipt, parsed documents and raw evidence hashes from one audit. `Evaluation`
+consumes that result. JSON semantics are checked against the same bytes that
+were hashed; large binary artifacts are streamed once per Trial audit. The
+publication receipt is rechecked after its dependent files, and artifact-manifest
+hashes must agree with the receipt.
+
+`DevelopmentExperience.read_with_record()` returns metadata and rehydrated
+evaluations together. Reading owned experience no longer constructs each
+Evaluation twice. Development feedback still binds every Trial to the exact
+parent, split, evaluator and complete plan; auxiliary declared files also remain
+subject to hash verification. Checkpoint ancestry reads each ancestor once and
+requires one fixed model family throughout. Owned file enumeration uses one
+directory scan per directory and rejects symlinks and non-regular files.
+
+This reuse is confined to one read-only audit. There is no process-wide digest
+cache, no timestamp shortcut and no reuse across an adapter call. Every new
+public read checks the actual bytes again, including same-size modifications
+with restored timestamps. Returned values describe verified bytes, not a lock
+on a mutable filesystem: a later change cannot alter an already serialized
+Evaluation and is rejected by the next read. Readers remain local POSIX tools,
+not storage authentication or adversarial process isolation.
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider \
+  tests/test_evidence_audit.py tests/test_trial_contract.py tests/test_trial_artifacts.py
+```
+
+These checks cover actual file-open counts, binary corruption, JSON/receipt
+replacement during reading, auxiliary evidence, and symlink/non-regular-file
+rejection. Comparing reader implementations on the same retained experience
+requires equal Evaluation digests, as well as elapsed time and file-open counts.
+Read-only historical Trial evidence can be inspected independently; a frozen
+campaign or checkpoint provider still requires its original implementation
+identity to resume effects. Performance work must not rewrite historical source
+or training receipts to make an old campaign accept new code.
+
+## Isaac native acceptance path
+
+```bash
+./physicalrsi auto-engineering --core-research \
+  --workspace /path/to/new-isaac-research \
+  --isaac-python /path/to/isaac51/bin/python \
+  --device-registry /path/to/shared-local-device-registry \
+  --resource isaac-gpu-0 --episodes 3 --rounds 2
+```
+
+Use the same device registry and resource name for all cooperating clients on
+the host. Resource names do not select CUDA devices or coordinate unrelated
+processes. No cluster instance is provisioned by this command.
+
+The native worker first constructs and settles the scene and publishes public
+RGB-D detections and joint positions. It waits up to 120 seconds for complete
+RGB-D and presentation frames, using render-only updates after settling; empty
+annotator arrays during shader compilation cannot become reset observations.
+The camera evidence records this warmup. Only then does the runtime dispatch the
+System 1 pick/place plan. One Trial action represents that complete plan, not
+one servo tick. The fixed Isaac controller executes at 60 Hz and records every
+actual joint target and subsequent joint observation in `public-rollout.json`.
+The runtime also retains images, depth, video, and private verifier evidence.
+An independent adapter re-runs the task judge on measured final object states
+and checks that the native plan and rollout match the dispatched action.
+
+`RolloutProposer` supplies verified development Evaluation values to the
+clearance evolver. Fresh paired validation compares parent and child; the next
+round executes the selected revision. A frozen final candidate is evaluated
+on report-only test seeds. The maximum reservation is
+`rounds * (1 + 2 * episodes) + episodes`; unused validation reservations are
+not consumed when no changed candidate exists. Completed trials resume by
+reading evidence. A worker timeout stops its owned process group, retains the
+unresolved receipt and device claim, and blocks automatic reexecution.
+
+`PhysicalRSI_demos.auto_engineering.research.setup(..., evolver=provider)` accepts
+another `RolloutEvolver`. The default only edits `memory_rules`; changing that
+search space requires a new declared evolution policy. The suite, algorithm,
+fixed source closure, splits and limits are recorded before effects. The native
+interpreter and referenced simulator assets remain externally managed; this is
+not a complete simulator installation or asset snapshot. Adapters are trusted
+code, and private verifier files are not a security sandbox against a malicious
+proposal provider.
+
+Results are in `result.json`, per-round receipts and
+`campaign/final-test/report.json`. The software contract tests use explicitly
+named doubles and do not establish native simulator success. Native success
+likewise establishes only the declared simulation-development scope, never
+physical qualification or broad engineering generalization.
+
+### Native development screening
+
+Add `--staged` to the command above for a bounded native multi-candidate study.
+Its pool contains one repair inferred from public development observations and
+two authored negative controls with transit heights of 0.10 m and 0.20 m. The
+controls test screening behavior; they do not demonstrate learned search.
+Development seeds are `5000 + round_index`, validation seeds are
+`20000 + 100 * round_index + case_index`, and final report-only seeds are
+`30000 + case_index`. These cases are separate from the earlier acceptance below.
+The complete split protocol is frozen before that round executes.
+
+The first fidelity evaluates one native development layout per child; the full
+fidelity uses all declared fresh validation layouts. A child must pass the
+development check to enter validation. The incumbent is marked unmeasured at
+screening and always remains available for full paired comparison. Add
+`--screen-incumbent` with `--staged` to also collect its diagnostic screening
+rollout. Screening scores cannot promote a candidate, and final
+test outcomes do not feed proposals. If the repair also fails screening, no
+improvement is inferred. Rejected candidates and their evidence are archived.
+
+`TrialAdapters` binds each policy and verifier to its own environment. Native
+development and screening own separate output directories even when they repeat
+the same case and candidate. The durable local scheduler allows one native
+worker at a time and shares the physical device registry. Its logical resource
+capacity does not reserve GPU memory against unrelated processes. The command
+does not provision instances. Full native evidence, interrupted-work recovery
+and device release use the ordinary core contracts.
+
+For this pool the maximum reservation is
+`rounds * (1 + 3 + 4 * episodes) + episodes`, or one more screening trial per
+changed round with `--screen-incumbent`; stages with no changed candidate
+consume no screening or validation trials. With three validation cases, two
+rejected controls avoid six validation trials while screening costs three extra
+trials by default (four with incumbent diagnostics). That is an accounting
+comparison for this declared pool, not a measured
+speedup or proof that screening generally improves sample efficiency. Software
+tests use a named contract double; actual native receipts are required to report
+simulator outcomes.
+
+### Observed native staged acceptance, 2026-10-13
+
+The same CPFS Isaac installation completed 15 native trials with one local
+worker at a time. Evidence, videos, archived candidates and independent restart
+checks are retained at
+`/cpfs02/user/yanming/physicalrsi-core-checks/native-staged-001`.
+Its `source-manifest.json` SHA-256 is
+`e0da755c0b821b0fd60104580a1fbdb3812a6181809b21c08a42ca8e3c916d7d`. Use that frozen
+source to reopen the study. It predates the default children-only screening
+optimization and therefore measures the incumbent at screening too.
+
+| Stage | Policy | Successful trials |
+| --- | --- | --- |
+| Development, seed 5000 | Initial | 0/1 |
+| Screening, same development seed | Initial / clearance repair / two low-clearance controls | 0/1 / 1/1 / 0/2 |
+| Paired validation, seeds 20000–20002 | Initial | 0/3 |
+| Same validation cases | Clearance repair | 3/3 |
+| Next-round development, seed 5001 | Inherited repair | 1/1 |
+| Report-only test, seeds 30000–30002 | Frozen final repair | 3/3 |
+
+The decisions are `inherit_child` and `no_changed_candidate`. Both authored
+negative controls were rejected before full validation and retained in the
+archive with their screening evidence. Six scheduler jobs completed, all local
+worker reservations and device claims were released, and independent restart
+created zero workers or trials while preserving the result and evidence files.
+These assertions are bound to raw Trial/Evaluation reads in
+`acceptance-audit.json`, `restart-audit.json` and `validation.json`.
+
+The repair uses public development RGB-D observations and an authored clearance
+rule; this is not a learned proposer or model update. Previously observed failed
+seeds 1000 and 100001 were excluded from this fresh protocol, so the study does
+not demonstrate that those failures were repaired. Scores on these new cases
+must not be treated as improvement over the earlier study's different cases.
+This is bounded simulation evidence, without broad task or physical qualification.
+
+The newer children-only screening policy is separately checked by native
+contract doubles and a CPU comparison with a common 26-trial cap: 26 trials
+without screening, 24 with full-pool screening and 22 with children-only
+screening. All three CPU arms select the same candidate, retain the same paired
+parent/child scores and final metrics, and restart with zero new trials. Their
+record is at
+`/cpfs02/user/yanming/physicalrsi-core-checks/screening-budget-001/validation.json`.
+Those CPU savings are not a measured native speedup.
+
+### Observed local native acceptance, 2026-10-13
+
+An isolated Isaac Sim 5.1.0.0 / Python 3.11.17 installation on cpfs02 executed
+11 native trials on one RTX PRO 5000 Blackwell GPU. Evidence is retained outside
+the repository at
+`/cpfs02/user/yanming/physicalrsi-isaac51-p0/acceptance-001`; installation and
+renderer/physics preflight records are in its parent directory. The frozen
+`source-v002/source-manifest.json` SHA-256 is
+`58532a2bf46a16a6853381b6fc967cf9b7340c4df3e561e3d7c61efd10bab92b`.
+This snapshot predates the candidate archive integration; use that frozen
+source to reopen its receipts. New source identities require a fresh campaign.
+
+| Stage | Policy | Successful trials |
+| --- | --- | --- |
+| Development, seed 17 | Initial, 0.13 m transit | 0/1 |
+| Paired validation, seeds 1000–1002 | Initial | 0/3 |
+| Same validation cases | Clearance candidate, 0.36 m transit | 2/3 |
+| Next-round development, seed 17 | Inherited candidate | 1/1 |
+| Report-only test, seeds 100000–100002 | Frozen final candidate | 2/3 |
+
+The two recorded decisions are `inherit_child` and `no_changed_candidate`.
+The evolver changed only the declared memory rule, using development RGB-D
+evidence; selection used fresh paired validation. Reopening the workspace
+returned the identical result, kept the trial reservation at 11 and created no
+new native workers. All device leases were released. The parent directory's
+`acceptance-001-audit.json` binds these checks to the retained reports.
+One validation case and one
+test case still failed object-placement or disturbance checks. This is a small
+local control experiment, not evidence of a generally capable engineering
+agent, model-driven improvement, statistical generalization or physical
+qualification. The native task scores are distinct from the software contract
+tests, which use doubles.
+
+The numerical calibration CPU example proves execution/proposal/evaluation/selection integration on
+CPU tasks. It does not reproduce GEPA or DGM, train weights, use an LLM, prove
+statistical generalization or qualify a simulator/robot. Model-driven native
+gains, search ablations and transfer remain separate acceptance work.
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider \
+  tests/test_core_versions.py tests/test_trial_contract.py tests/test_rollout_evolution.py
+PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider tests/test_task_case_identity.py
+```
+
+## Development feedback parameter search
+
+`CandidateArchive.development(view)` audits the frozen archive view and returns
+owned common Trial/Evaluation observations from development and screening.
+Each observation is bound to its candidate closure, task, case, scope and archived
+receipt. Validation and final-test evaluations are excluded. Rejected screening
+probes remain usable observations after their original execution folder is lost.
+Legacy archives without common Trial receipts return no observations.
+
+`ScalarRefinementEvolver` is an optional task-independent numerical search port.
+A `ScalarParameter` declares one JSON field, its mutable component, bounds,
+precision and direction. A task adapter classifies development observations as
+`satisfied`, `insufficient` or `unresolved`. Search combines only the same task,
+case, scope and other controller inputs, and records every used trial and excluded
+condition in immutable `search-fit.json`. It advances beyond failed values toward
+the observed success bound or declared domain limit. Contradictory per-case
+feedback, exhausted bounds and unclassified failures produce no candidate.
+Publication is atomic and repeatable after interruption; the committed parent is
+unchanged until normal admission, fresh paired validation and selection succeed.
+
+The monotonicity assumption, mutation domain and feedback classifier are authored.
+This is an empirical search algorithm, not a model update or a causal guarantee.
+The CPU acceptance executes Newton iterations for two square-root tasks: a
+five-iteration probe fails screening, its archived residuals drive a seven-iteration
+proposal in round two, and normal validation determines inheritance. Run it in a
+new temporary workspace:
+
+```bash
+python -c 'from PhysicalRSI_demos.parameter_refinement import run; print(run("/tmp/physicalrsi-parameter-study")["quota"])'
+PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider tests/test_parameter_search.py
+```
+
+For Isaac, `--core-research --feedback-search` uses the same core with carrying
+height bounded to 0.10–0.55 m. The adapter requires both a grasp-like aperture in
+phase 3 of the actual joint trace and independently measured obstacle disturbance
+before classifying a failure as potentially insufficient clearance. That is a
+hypothesis to test; failures from missing grasps remain unresolved.
+The protocol repeatedly uses known historical failure seed 1000 for development,
+seeds `40000 + 100 * round_index + i` for fresh validation, and `50000 + i` for
+report-only final testing. Seed 1000 is an explicit regression case, not held out.
+The default two rounds and three evaluation cases reserve at most 19 trials;
+one child is screened per round before any full paired comparison. This mode
+implies staged evaluation and remains serial on one leased native worker.

@@ -13,7 +13,8 @@ from typing import Protocol
 from .. import experiments
 from ..contracts import ReconciliationRequired
 from ..embodiment import Revision, System2Trial
-from ..experiments import Budget, ExperimentRuntime
+from ..experiments import Budget, ExperimentRuntime, trial_adapters, trial_factory_kind
+from ..trials import Evaluation, Trial, task_case_identity
 from ..infra.storage import atomic_json, digest, file_digest, identifier, locked, read_json, relative_path
 from . import now
 from .artifacts import verify_harness
@@ -29,6 +30,8 @@ class ExperimentSuite(Protocol):
     def environment(self, task: str): ...
     def policy(self, candidate: dict, task: str): ...
     def verifier(self, task: str): ...
+    # Stateful/concurrent suites may instead provide trial(candidate, task)
+    # returning one independent TrialAdapters bundle, without execution effects.
 
 
 def freeze_json(path, value):
@@ -59,15 +62,20 @@ class ExperimentEvaluator:
 
     def identity(self):
         return dict(kind="experiment-evaluator/v1", suite=self.suite.identity(),
+                    trial_factory=trial_factory_kind(self.suite),
+                    case_identity="task-case/v1",
                     budgets={task: asdict(budget) for task, budget in self.budgets.items()},
                     scope=self.scope, system2=asdict(self.system2), quota=self.quota.identity(),
                     device_registry=self.device_registry.identity() if self.device_registry else None,
                     score_measurement=self.score_measurement,
-                    implementation={name: file_digest(path) for name, path in {
-                        "evaluator": Path(__file__), "runtime": Path(experiments.__file__),
+                    implementation=dict(experiments.runtime_implementation(), **{
+                        name: file_digest(path) for name, path in {
+                        "evaluator": Path(__file__),
                         "bridge": Path(__file__).with_name("experiments.py"),
                         "scoring": Path(__file__).with_name("selection.py"),
-                    }.items()})
+                        "rollout": Path(__file__).with_name("rollout.py"),
+                        "harness_artifacts": Path(__file__).with_name("artifacts.py"),
+                    }.items()}))
 
     def _stable(self):
         if self.identity() != self._identity:
@@ -106,7 +114,7 @@ class ExperimentEvaluator:
             if profile is not None and len(values) != profile["tasks"][task]["episodes"]:
                 raise ValueError("Case count differs from the comparison profile")
             for case in values:
-                sha = digest(case)
+                sha = task_case_identity(task, case)
                 if sha in seen:
                     raise ValueError("Repeated case in experiment plan")
                 seen.add(sha)
@@ -130,7 +138,7 @@ class ExperimentEvaluator:
                     cohort_sha256=digest(cohort) if cohort is not None else None,
                     cases=cases, trials=[
                         dict(task=task, case=case, budget=asdict(self.budgets[task]),
-                             run_id="trial-" + digest(dict(task=task, case=case)))
+                             run_id="trial-" + task_case_identity(task, case))
                         for task, values in sorted(cases.items()) for case in values])
 
     def _reservations(self, directory, plan):
@@ -189,10 +197,14 @@ class ExperimentEvaluator:
             if verify_harness(candidate) != plan["candidate_sha256"]:
                 raise ValueError("Candidate changed between trials")
             task = row["task"]
-            receipt = runtime.run(
-                row["run_id"], task=task, case=deepcopy(row["case"]), scope=self.scope,
-                environment=self.suite.environment(task), policy=self.suite.policy(deepcopy(candidate), task),
-                verifier=self.suite.verifier(task), budget=self.budgets[task], system2=origin)
+            trial = Trial(row["run_id"], task=task, case=row["case"], scope=self.scope,
+                          budget=self.budgets[task], system2=origin)
+            adapters = trial_adapters(self.suite, candidate, task)
+            self._stable()
+            if verify_harness(candidate) != plan["candidate_sha256"]:
+                raise ValueError("Candidate changed during trial adapter construction")
+            receipt = runtime.run_trial(trial, environment=adapters.environment,
+                                        policy=adapters.policy, verifier=adapters.verifier)
             require_validation_outcome(receipt, task)
             receipts.append(receipt)
         self._stable()
@@ -213,20 +225,32 @@ class ExperimentEvaluator:
             plan = self._plan(parent["id"], sha, self._cases(cases), split="development")
             freeze_json(path, plan)
             self._reserve([(directory, plan)])
-            runtime, receipts = self._run_plan(parent, directory, plan)
-            rows = [dict(task=row["task"], case=row["case"], run_id=row["run_id"],
-                         outcome=receipt["outcome"], measurements=receipt["verdict"]["measurements"])
-                    for row, receipt in zip(plan["trials"], receipts)]
-            evidence = {str(p.relative_to(output)): file_digest(p)
-                        for p in directory.rglob("*.json")}
-            for row, receipt in zip(plan["trials"], receipts):
-                for name, expected in receipt["evidence"].items():
-                    path = runtime.root / row["run_id"] / relative_path(name)
-                    if file_digest(path) != expected:
-                        raise ValueError("Development evidence changed")
-                    evidence[str(path.relative_to(output))] = expected
-            return dict(split="evolve", evaluator_revision=self.revision, episodes=rows,
-                        evidence=evidence, costs=dict(reserved_trials=len(rows)))
+            self._run_plan(parent, directory, plan)
+            return self.read_development(parent, output)
+
+    def read_development(self, parent, output):
+        """Verify already completed development; never fill missing trials."""
+        output = self._output(output)
+        self._stable()
+        directory = self._directory(output, "development", parent["id"])
+        saved = read_json(directory / "plan.json")
+        plan = self._plan(parent["id"], verify_harness(parent), self._cases(saved["cases"]), split="development")
+        if saved != plan or read_json(directory / "quota.json") != self.quota.verify(self._reservations(directory, plan)):
+            raise ValueError("Development plan or quota changed")
+        runtime = ExperimentRuntime(directory / "trials", device_registry=self.device_registry)
+        values = [Evaluation.read(runtime, row["run_id"]).to_dict() for row in plan["trials"]]
+        rows = [dict(task=row["task"], case=row["case"], run_id=row["run_id"],
+                     outcome=value["outcome"], measurements=value["verdict"]["measurements"])
+                for row, value in zip(plan["trials"], values)]
+        evidence = {str(p.relative_to(output)): file_digest(p) for p in directory.rglob("*.json")}
+        for value in values:
+            for name, sha in value["evidence"].items():
+                evidence[str(Path(name).relative_to(output))] = sha
+        result = dict(split="evolve", evaluator_revision=self.revision, episodes=rows,
+                      evaluations=values, evidence=evidence, costs=dict(reserved_trials=len(rows)))
+        from .rollout import development_evaluations
+        development_evaluations(parent, result, output)
+        return result
 
     def _comparison(self, comparison):
         comparison = deepcopy(comparison)
@@ -253,14 +277,14 @@ class ExperimentEvaluator:
             if (development["candidate_sha256"] != comparison["candidates"][parent_id]
                     or development["evaluator_revision"] != self.revision):
                 raise ValueError("Development plan differs from the frozen incumbent")
-            seen = {digest(c) for values in development["cases"].values() for c in values}
-            layouts = {task: [digest(c) for c in values] for task, values in cases.items()}
+            seen = {task_case_identity(task, c) for task, values in development["cases"].items() for c in values}
+            layouts = {task: [task_case_identity(task, c) for c in values] for task, values in cases.items()}
             if seen.intersection(sha for values in layouts.values() for sha in values):
                 raise ValueError("Validation cases overlap development")
             freeze_json(path, cases)
             cohort_path = output / "validation-cohort.json"
             generated_at = read_json(cohort_path)["generated_at"] if cohort_path.exists() else now()
-            cohort = dict(split="validation", comparison_sha256=digest(comparison),
+            cohort = dict(split="validation", comparison_sha256=digest(comparison), case_identity="task-case/v1",
                           generated_at=generated_at, layouts=layouts,
                           admission_evidence={str(p.relative_to(output)): file_digest(p)
                                               for p in (path, development_path)})
@@ -280,7 +304,7 @@ class ExperimentEvaluator:
         # Sampling has no external effects; saved cases are never redrawn.
         return self.validation(comparison, output)
 
-    def evaluate(self, candidate, comparison, cohort, output):
+    def _evaluation_plan(self, candidate, comparison, cohort, output):
         output = self._output(output)
         self._stable()
         comparison = self._comparison(comparison)
@@ -294,23 +318,40 @@ class ExperimentEvaluator:
             if file_digest(output / relative_path(name)) != expected:
                 raise ValueError("Validation case admission evidence changed")
         cases = self._cases(read_json(output / "validation-cases.json"), comparison["profile"])
-        if {task: [digest(c) for c in values] for task, values in cases.items()} != cohort["layouts"]:
+        if (cohort.get("case_identity") != "task-case/v1"
+                or {task: [task_case_identity(task, c) for c in values] for task, values in cases.items()} != cohort["layouts"]):
             raise ValueError("Validation cases differ from cohort layouts")
         directory = self._directory(output, "validation", candidate["id"])
+        plan = self._plan(candidate["id"], sha, cases, split="validation",
+                          comparison=comparison, cohort=cohort)
+        return output, comparison, directory, plan
+
+    def evaluate(self, candidate, comparison, cohort, output):
+        output, comparison, directory, plan = self._evaluation_plan(candidate, comparison, cohort, output)
         with locked(directory / ".plan.lock"):
-            plan = self._plan(candidate["id"], sha, cases, split="validation",
-                              comparison=comparison, cohort=cohort)
             freeze_json(directory / "plan.json", plan)
             self._reserve([(directory, plan)])
-            runtime, _ = self._run_plan(candidate, directory, plan, comparison=comparison)
-            result = experiment_result(
-                runtime, [row["run_id"] for row in plan["trials"]], candidate_id=candidate["id"],
-                comparison=comparison, cohort=cohort, evaluator_revision=self.revision,
-                evidence_root=output, score_measurement=self.score_measurement)
-            for row in result["episodes"]:
-                row["evidence_sha256"].update({str(p.relative_to(output)): file_digest(p)
-                    for p in (directory / "plan.json", directory / "quota.json")})
-            return result
+            self._run_plan(candidate, directory, plan, comparison=comparison)
+            return self.read_evaluation(candidate, comparison, cohort, output)
+
+    def read_evaluation(self, candidate, comparison, cohort, output):
+        """Rebuild a result from complete native receipts, without running trials."""
+        output, comparison, directory, plan = self._evaluation_plan(candidate, comparison, cohort, output)
+        if read_json(directory / "plan.json") != plan:
+            raise ValueError("Frozen evaluation plan changed")
+        receipt = self.quota.verify(self._reservations(directory, plan))
+        if read_json(directory / "quota.json") != receipt:
+            raise ValueError("Evaluation quota receipt changed")
+        runtime = ExperimentRuntime(directory / "trials", device_registry=self.device_registry)
+        result = experiment_result(
+            runtime, [row["run_id"] for row in plan["trials"]], candidate_id=candidate["id"],
+            comparison=comparison, cohort=cohort, evaluator_revision=self.revision,
+            evidence_root=output, score_measurement=self.score_measurement)
+        for row in result["episodes"]:
+            row["evidence_sha256"].update({str(p.relative_to(output)): file_digest(p)
+                for p in (directory / "plan.json", directory / "quota.json")})
+        self._stable()
+        return result
 
     def resume_evaluation(self, candidate, comparison, cohort, output):
         """Verify finished trials, block unknown trials, then run missing trials."""

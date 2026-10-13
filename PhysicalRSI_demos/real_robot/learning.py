@@ -136,7 +136,15 @@ def selected_policy(lineage, *, task, qualification, environment_capture=None):
     """
     use_physicalrsi()
     from PhysicalRSI_core.lineage import HarnessState
-    record = HarnessState(lineage).resolve()
+    state = HarnessState(lineage)
+    record = state.resolve()
+    # An unchanged assessment preserves evidence but cannot promote bootstrap
+    # or erase the original selected policy's qualification provenance.
+    while record["action"] == "assessment":
+        parent = state.read(record["previous"])
+        if parent["harness"] != record["harness"] or parent["freeze_sha256"] != record["freeze_sha256"]:
+            raise ValueError("Retained assessment changed its incumbent")
+        record = parent
     if record["action"] != "selection":
         raise ValueError("Lineage has no independently selected incumbent")
     manifest = record["harness"]

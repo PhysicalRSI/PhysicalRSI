@@ -20,6 +20,11 @@ The built-in evaluator and suite wrappers distinguish immutable case plans,
 memory revisions, selected parents and admission reports from implementation
 rules. Full provider identities are still frozen and checked within each round.
 Lineage binds the complete round configuration and rechecks selection evidence.
+A completed paired decision that retains the parent creates an `assessment`
+lineage revision with unchanged harness bytes and preserved evaluation evidence.
+This lets later retention checks use observations from unsuccessful searches.
+Consumers should compare harness hashes to detect execution changes; a new
+lineage revision alone does not imply a promoted controller.
 Changing a verifier implementation or scoring rule requires a new campaign.
 
 `CaseProtocol` plans remain immutable. Each round gets a new validation plan;

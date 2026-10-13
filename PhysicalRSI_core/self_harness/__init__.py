@@ -18,7 +18,7 @@ from PhysicalRSI_core.infra.storage import (
     read_json,
 )
 
-from .artifacts import verify_harness
+from .artifacts import EvolutionSpec, verify_harness
 from .selection import validate_profile
 from .bindings import policy_identity, validate_admission, validate_round_context
 
@@ -56,15 +56,29 @@ class SelfHarness:
         scope,
         max_candidates=3,
         round_context=None,
+        evolution: EvolutionSpec | None = None,
+        archive=None,
     ):
         if type(max_candidates) is not int or not 1 <= max_candidates <= 32:
             raise ValueError("Bounded candidate budget required")
         validate_profile(profile)
+        self.evolution = evolution if evolution is not None else EvolutionSpec()
+        if not isinstance(self.evolution, EvolutionSpec):
+            raise ValueError("Declare an EvolutionSpec")
         if round_context is not None:
             validate_round_context(round_context)
             if not callable(getattr(proposer, "propose_with_context", None)) or not callable(getattr(evaluator, "register_round", None)):
                 raise ValueError("Research rounds require context-aware proposal and split registration ports")
         self.root = Path(root).resolve()
+        self.archive = archive
+        if archive is not None:
+            from .archive import CandidateArchive
+            if (not isinstance(archive, CandidateArchive) or archive.root.is_relative_to(self.root)
+                    or self.root.is_relative_to(archive.root)):
+                raise ValueError("Declare a candidate archive outside round evidence")
+            proposal_archive = getattr(proposer, "archive", None)
+            if proposal_archive is not None and proposal_archive.identity() != archive.identity():
+                raise ValueError("Proposal and round must share their archive")
         self.state, self.proposer, self.evaluator, self.selector = (
             state,
             proposer,
@@ -77,6 +91,7 @@ class SelfHarness:
             scope=scope,
             max_candidates=max_candidates,
             identities=self.identities(),
+            evolution=self.evolution.identity(),
         )
         self.round_context = deepcopy(round_context)
         self.policy = deepcopy(self.config)
@@ -91,7 +106,7 @@ class SelfHarness:
             atomic_json(path, self.config)
 
     def identities(self):
-        return dict(
+        result = dict(
             proposer=self.proposer.identity(),
             evaluator=self.evaluator.identity(),
             selector=self.selector.identity(),
@@ -99,6 +114,20 @@ class SelfHarness:
             artifacts=file_digest(Path(__file__).with_name("artifacts.py")),
             scoring=file_digest(Path(__file__).with_name("selection.py")),
         )
+        if self.archive is not None:
+            result["archive"] = self.archive.identity()
+        return result
+
+    def _finish(self, current):
+        if self.archive is not None:
+            from .evaluation import freeze_json
+            archived = self.archive.capture_round(self.root, state=self.state, selector=self.selector)
+            if archived["result_revision"] != current["revision"]:
+                raise ValueError("Archived round differs from the selected state")
+            self._stable()
+            freeze_json(self.root / "archive.json", dict(archive=self.archive.identity(),
+                                                        revision=archived["revision"]))
+        return current
 
     def _campaign_policy(self):
         protocol = {key: value for key, value in self.config["protocol"].items() if key != "identity"}
@@ -109,11 +138,14 @@ class SelfHarness:
                           lineage=file_digest(Path(__file__).parent.parent / "lineage" / "__init__.py"))
         return dict(schema="physicalrsi.campaign-policy/v2", profile=deepcopy(self.config["profile"]),
                     protocol=deepcopy(protocol), scope=self.config["scope"],
-                    max_candidates=self.config["max_candidates"], identities=identities)
+                    max_candidates=self.config["max_candidates"], identities=identities,
+                    evolution=self.evolution.identity())
 
     def _stable(self):
         if read_json(self.root / "config.json") != self.config:
             raise ValueError("Frozen experiment configuration changed")
+        if self.evolution.identity() != self.config["evolution"]:
+            raise ValueError("Frozen evolution specification changed")
         if self.identities() != self.config["identities"]:
             raise ValueError("Executable port or core identity changed")
         if self.round_context is not None and self._campaign_policy() != self.policy:
@@ -196,7 +228,18 @@ class SelfHarness:
                 raise ValueError(
                     "Interaction completed; current state has since changed"
                 )
-            return value
+            return self._finish(value)
+        archive_view = None
+        if self.archive is not None:
+            from .evaluation import freeze_json
+            view_path = self.root / "archive-view.json"
+            archive_view = (read_json(view_path) if view_path.exists() else
+                            self.archive.view(scope=self.config["scope"], policy_sha256=digest(self.policy)))
+            if (archive_view["scope"] != self.config["scope"]
+                    or archive_view["policy_sha256"] != digest(self.policy)):
+                raise ValueError("Archive view differs from this round's search policy")
+            self.archive.summaries(archive_view)
+            freeze_json(view_path, archive_view)
         feedback = self._step(
             "develop",
             parent_sha,
@@ -206,6 +249,8 @@ class SelfHarness:
         if feedback.get("split") != "evolve" or not feedback.get("evidence"):
             raise ValueError("Development evidence, including failures, required")
         proposal_inputs = dict(parent=parent_sha, feedback=feedback)
+        if archive_view is not None:
+            proposal_inputs["archive_view"] = archive_view
         if self.round_context is not None:
             proposal_inputs["research_context"] = self.round_context
         children = self._step(
@@ -234,7 +279,7 @@ class SelfHarness:
                 self.root / "retained.json",
                 dict(reason="no_changed_candidate", qualification=None),
             )
-            return current
+            return self._finish(current)
         pool = [parent, *children]
         hashes = {h["id"]: verify_harness(h) for h in pool}
         if len(hashes) != len(pool) or len(set(hashes.values())) != len(pool):
@@ -242,6 +287,10 @@ class SelfHarness:
         if hashes[parent["id"]] != parent_sha:
             raise ValueError("Parent edited during proposal")
         for child in children:
+            if "archive_origin" in child:
+                if self.archive is None:
+                    raise ValueError("Archived proposals require a declared archive")
+                self.archive.verify_origin(archive_view, child["archive_origin"])
             if self.round_context is not None:
                 used = child.get("used_lessons")
                 if (not isinstance(used, list) or any(not isinstance(x, str) for x in used)
@@ -256,6 +305,7 @@ class SelfHarness:
                     raise ValueError("Research proposal hypotheses and check names must be explicit")
             if child["components"]["foundation"] != parent["components"]["foundation"]:
                 raise ValueError("Foundation F must stay fixed")
+            self.evolution.compare(parent, child)
             if child.get("parent_sha256") != parent_sha or not all(
                 child.get(k)
                 for k in ("method", "changes", "environment", "evidence", "costs")
@@ -263,7 +313,7 @@ class SelfHarness:
                 raise ValueError("Candidate provenance or costs missing")
             if Path(child["root"]).resolve() == Path(parent["root"]).resolve():
                 raise ValueError("Materialize children separately")
-        accepted, rejected = [], {}
+        accepted, rejected, screening = [], {}, None
         for h in pool:
             receipt = self._step(
                 "admit_" + h["id"],
@@ -279,9 +329,33 @@ class SelfHarness:
                 if not receipt.get("reason"):
                     raise ValueError("Keep rejection reasons")
                 rejected[h["id"]] = receipt
+        if len(accepted) > 1 and callable(getattr(self.evaluator, "screen_pool", None)):
+            screening = self._step(
+                "screening", dict(parent=parent_sha, candidates={h["id"]: hashes[h["id"]] for h in accepted}),
+                lambda: self.evaluator.screen_pool(deepcopy(parent), deepcopy(accepted), self.root),
+                recover=self._recovery(self.evaluator, "resume_screening", parent, accepted),
+            )
+            if (screening.get("role") != "screening_only" or not screening.get("evidence")
+                    or set(screening["candidates"]) != {h["id"] for h in accepted}):
+                raise ValueError("Screening must cover the entire admitted pool")
+            from PhysicalRSI_core.infra.storage import relative_path
+            for name, sha in screening["evidence"].items():
+                if relative_path(name).parts[:2] != ("experiments", "screening") or file_digest(self.root / name) != sha:
+                    raise ValueError("Screening evidence changed or crossed its stage")
+            survivors = []
+            for h in accepted:
+                row = dict(screening["candidates"][h["id"]], evidence=screening["evidence"])
+                validate_admission(row, hashes[h["id"]])
+                if row["accepted"]:
+                    survivors.append(h)
+                elif h["id"] == parent["id"]:
+                    raise ValueError("Screening cannot remove the incumbent")
+                else:
+                    rejected[h["id"]] = row
+            accepted = survivors
         self._step(
             "admission",
-            hashes,
+            dict(candidates=hashes, screening=screening) if screening is not None else hashes,
             lambda: dict(rejected=rejected, accepted=[h["id"] for h in accepted]),
         )
         # Even all-rejected pools evaluate the incumbent on fresh inputs only if
@@ -296,7 +370,7 @@ class SelfHarness:
             current = self.state.resolve()
             if current["revision"] != anchor["revision"]:
                 raise ValueError("Committed parent changed during admission")
-            return current
+            return self._finish(current)
         comparison = self._step(
             "freeze",
             dict(pool=hashes, config=self.config),
@@ -342,6 +416,20 @@ class SelfHarness:
         if len(set(layouts)) != len(layouts):
             raise ValueError("Duplicate validation inputs")
         self.state.reserve_validation(digest(comparison), layouts)
+        pooled = None
+        if callable(getattr(self.evaluator, "evaluate_pool", None)):
+            if {p["id"]: verify_harness(p) for p in pool} != hashes:
+                raise ValueError("Executable changed before pooled evaluation")
+            pooled = self._step(
+                "evaluation_pool", dict(comparison=comparison, cohort=cohort),
+                lambda: self.evaluator.evaluate_pool(deepcopy(accepted), deepcopy(comparison),
+                                                     deepcopy(cohort), self.root),
+                recover=self._recovery(self.evaluator, "resume_evaluation_pool", accepted, comparison, cohort),
+            )
+            if (not isinstance(pooled, list) or len(pooled) != len(accepted)
+                    or {r["candidate_id"] for r in pooled} != {h["id"] for h in accepted}):
+                raise ValueError("Pooled evaluation must cover every admitted candidate exactly once")
+            pooled = {r["candidate_id"]: r for r in pooled}
         results = []
         for h in accepted:
             if {p["id"]: verify_harness(p) for p in pool} != hashes:
@@ -349,9 +437,8 @@ class SelfHarness:
             result = self._step(
                 "evaluate_" + h["id"],
                 dict(comparison=comparison, cohort=cohort, candidate=hashes[h["id"]]),
-                lambda h=h: self.evaluator.evaluate(
-                    deepcopy(h), deepcopy(comparison), deepcopy(cohort), self.root
-                ),
+                lambda h=h: deepcopy(pooled[h["id"]]) if pooled is not None else self.evaluator.evaluate(
+                    deepcopy(h), deepcopy(comparison), deepcopy(cohort), self.root),
                 recover=self._recovery(self.evaluator, "resume_evaluation", h, comparison, cohort),
             )
             if {p["id"]: verify_harness(p) for p in pool} != hashes:
@@ -389,6 +476,12 @@ class SelfHarness:
                     if not path.is_relative_to(self.root) or file_digest(path) != sha:
                         raise ValueError("Evaluation evidence changed before commit")
                     evidence[str(path)] = sha
+        if screening is not None:
+            for name, sha in screening["evidence"].items():
+                path = self.root / relative_path(name)
+                if file_digest(path) != sha:
+                    raise ValueError("Screening evidence changed before commit")
+                evidence[str(path)] = sha
         committed = self.state.commit(
             anchor["revision"],
             survivor,
@@ -398,4 +491,4 @@ class SelfHarness:
             comparison_root=self.root,
         )
         atomic_json(done, committed)
-        return committed
+        return self._finish(committed)

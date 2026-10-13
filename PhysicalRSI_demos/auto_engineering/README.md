@@ -140,3 +140,52 @@ receipt and trajectory digests bind the render to the native episode. Recorded b
 is disabled during presentation replay: this is a re-render of measured states,
 not a second evaluation or additional success evidence. The original native
 video and receipts remain available for comparison.
+# Common core research path
+
+The optional `--core-research` path runs this native task through the shared
+Trial/Evaluation, owned evidence, recursive research and versioned lineage
+contracts. It uses the existing bounded public-clearance repair as its default
+control evolver. See [core development](../../docs/core-development.md#isaac-native-acceptance-path)
+for evidence semantics, recovery boundaries and provider extension points.
+
+```bash
+./physicalrsi auto-engineering --core-research \
+  --workspace /path/to/new-isaac-research \
+  --isaac-python /path/to/isaac51/bin/python \
+  --episodes 3 --rounds 2 \
+  --device-registry /path/to/shared-local-device-registry
+```
+
+The command produces JSON research receipts and a held-out final report. It
+requires native Isaac Sim 5.1; no software physics substitute is used. The
+existing command without `--core-research` retains its single-round visual
+report workflow. Neither workflow qualifies physical robot execution.
+
+Add `--staged` to run native development screening before paired validation.
+The declared pool contains one clearance repair inferred from public development
+observations and two authored low-clearance negative controls (0.10 m and 0.20 m).
+They test whether screening rejects ineffective candidates; they are not learned
+proposals. Each child receives one screening rollout. The incumbent is marked
+unmeasured during screening and receives full paired validation alongside
+surviving children. Add `--screen-incumbent` to also collect its diagnostic
+screening rollout. A local queue permits one native worker at a time; all clients must
+still share the device registry. Rejected branches and screening evidence remain
+in the candidate archive. See the [staged acceptance protocol](../../docs/core-development.md#native-development-screening)
+for split identities, trial limits and the meaning of the result.
+
+Add `--feedback-search` with `--core-research` to search a bounded carrying-height
+parameter using actual development outcomes, including previously rejected
+screening probes. This mode implies staged evaluation with one candidate per
+round. It uses known failure seed 1000 for development and separate preregistered
+validation/test seeds. A grasp-like joint aperture and measured obstacle
+disturbance support the clearance hypothesis; insufficient evidence or
+contradictory outcomes stop that search. The field bounds and monotonicity
+assumption are authored. See [parameter search](../../docs/core-development.md#development-feedback-parameter-search)
+for the exact split protocol and limitations.
+
+```bash
+./physicalrsi auto-engineering --core-research --feedback-search \
+  --workspace /path/to/new-isaac-feedback-study \
+  --isaac-python /path/to/isaac51/bin/python --episodes 3 --rounds 2 \
+  --device-registry /path/to/shared-local-device-registry
+```

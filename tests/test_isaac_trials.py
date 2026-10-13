@@ -1,0 +1,184 @@
+"""Contract doubles only; these tests provide no native simulator qualification."""
+from pathlib import Path
+import subprocess
+import sys
+from threading import Thread
+import time
+
+import pytest
+
+from PhysicalRSI_core.contracts import Cancelled, Context, ReconciliationRequired
+from PhysicalRSI_core.experiments import Budget, ExperimentRuntime
+from PhysicalRSI_core.infra.devices import DeviceRegistry
+from PhysicalRSI_core.infra.storage import atomic_json, digest, file_digest, read_json
+from PhysicalRSI_core.trials import Trial
+from PhysicalRSI_demos.auto_engineering import research, trials
+from PhysicalRSI_demos.auto_engineering.harness import create_seed
+from PhysicalRSI_demos.auto_engineering.task import TASK, SCOPE, layout, judge
+from PhysicalRSI_demos.auto_engineering.trial_bridge import receive_plan
+
+
+class ContractWorker(trials.NativeWorker):
+    resets = []
+    success_height = .2
+    phase = 9
+    finger_position = .1
+    disturb_on_failure = False
+
+    def identity(self):
+        return dict(kind="contract-test-double", source=file_digest(Path(__file__)))
+
+    def reset(self, case, context):
+        self.case = case
+        self.output = self.root / (context.episode + "-" + context.harness_revision)
+        self.output.mkdir(parents=True, exist_ok=False)
+        self.resets.append(dict(case=case, candidate=context.harness_revision))
+        public = {name: dict(status="estimated_surface", center_xy=[.4, .2], top_z=z)
+                  for name, z in (("tube", .13), ("receiver", .02), ("obstacle", .18))}
+        self.initial = dict(public_observation=public, joint_positions=[0.] * 9)
+        return dict(ready=True, observation=self.initial)
+
+    def execute(self, action, context):
+        spec = layout(self.case["seed"])
+        success = action["memory"]["transit_height_m"] > self.success_height
+        measured = dict(tube_position=[*spec["receiver"][:2], .081] if success else spec["tube"],
+            tube_orientation_wxyz=[1, 0, 0, 0], tube_velocity=[0, 0, 0], obstacle_position=spec["obstacle"],
+            distractor_position=spec["distractor"], gripper_opening=.08)
+        if self.disturb_on_failure and not success:
+            measured['obstacle_position'] = [spec['obstacle'][0]+.2, *spec['obstacle'][1:]]
+        rollout = [dict(observation=self.initial), dict(step=0, action=dict(kind="joint_targets", joint_positions=[.1]*9),
+            observation=dict(joint_positions=[.1]*7+[self.finger_position]*2), phase=self.phase)]
+        for name, value in {"layout": spec, "private-evaluation": measured, "plan": action["plan"],
+                            "public-rollout": rollout}.items():
+            atomic_json(self.output / (name + ".json"), value)
+        result = dict(state="completed", backend="isaacsim-5.1", **judge(spec, measured),
+            runtime_version="5.1.0",
+            seed=self.case["seed"], memory=action["memory"], public_observation=self.initial["public_observation"],
+            layout_sha256=digest(spec), controller_completed=True, physics_steps=1,
+            evidence={p.name: file_digest(p) for p in self.output.glob("*.json")})
+        atomic_json(self.output / "result.json", result)
+        return result, rollout
+
+
+def test_native_adapter_campaign_attribution_restart_and_media_tampering(tmp_path, monkeypatch):
+    monkeypatch.setattr(trials, "NativeWorker", ContractWorker)
+    ContractWorker.resets = []
+    result = research.run(tmp_path, sys.executable, episodes=2, rounds=2)
+    assert result["state"] == "completed" and result["qualification"] is None
+    assert result["scope"] == SCOPE
+    assert [row["outcome"] for row in result["rounds"]] == ["inherit_child", "no_changed_candidate"]
+    assert result["final_test"]["metrics"][TASK]["success_rate"] == 1
+    assert result["quota"]["reserved_trials"] == len(ContractWorker.resets) == 8
+    assert len({row["candidate"] for row in ContractWorker.resets}) == 2
+    assert research.run(tmp_path, sys.executable, episodes=2, rounds=2) == result
+    assert len(ContractWorker.resets) == 8
+    receipt = next((tmp_path / "campaign/rounds").glob("**/trials/*/receipt.json"))
+    payload = read_json(receipt)
+    assert payload["binding"]["embodiment"]["mode"] == "simulation"
+    assert "artifacts/native/public-rollout.json" in payload["evidence"]
+    (receipt.parent / "artifacts/native/public-rollout.json").write_text("[]")
+    with pytest.raises(ValueError):
+        research.run(tmp_path, sys.executable, episodes=2, rounds=2)
+    assert len(ContractWorker.resets) == 8
+
+
+def test_worker_reset_waits_for_system1_action(tmp_path):
+    observed = {}
+    def worker():
+        observed["action"] = receive_plan(tmp_path, {"joint_positions": [0]}, timeout=3)
+    thread = Thread(target=worker)
+    thread.start()
+    deadline = time.monotonic() + 2
+    while not (tmp_path / "ready.json").exists() and time.monotonic() < deadline:
+        time.sleep(.01)
+    assert read_json(tmp_path / "ready.json")["ready"] is True
+    assert thread.is_alive()
+    request = dict(memory={"height": .3}, plan={"pick": [0, 0, 0]})
+    atomic_json(tmp_path / "action.json", request)
+    thread.join(timeout=3)
+    assert not thread.is_alive() and observed["action"] == request
+    with pytest.raises(TimeoutError):
+        receive_plan(tmp_path / "timeout", {}, timeout=.01)
+
+
+@pytest.mark.parametrize('screen_incumbent',[False,True])
+def test_native_staged_contract_keeps_screening_separate_and_releases_queue(tmp_path,monkeypatch,screen_incumbent):
+    monkeypatch.setattr(trials,"NativeWorker",ContractWorker)
+    ContractWorker.resets=[]
+    result=research.run(tmp_path,sys.executable,episodes=3,rounds=2,staged=True,screen_incumbent=screen_incumbent)
+    assert result['scope']==SCOPE and result['qualification'] is None
+    assert result['quota']['reserved_trials']==len(ContractWorker.resets)==14+int(screen_incumbent)
+    assert [r['outcome'] for r in result['rounds']]==['inherit_child','no_changed_candidate']
+    directory=tmp_path/'campaign/rounds/round-0001/execution'
+    screening=read_json(directory/'screening.json')['output']
+    assert screening['role']=='screening_only'
+    assert screening['candidates']['initial']['measured'] is screen_incumbent
+    assert screening['candidates']['initial']['per_task']==({TASK:0.} if screen_incumbent else None)
+    assert {name for name,v in screening['candidates'].items() if not v['accepted']}=={'low-clearance-0-0','low-clearance-0-1'}
+    comparison=read_json(directory/'freeze.json')['output']
+    assert set(comparison['candidates'])=={'initial','clearance-0'}
+    assert {x['case']['seed'] for x in ContractWorker.resets if x['case']['seed']<10000}=={5000,5001}
+    assert result['scheduling']['used']=={'native_worker':0}
+    assert len(result['scheduling']['jobs'])==5+int(screen_incumbent)
+    assert all(j['state']=='completed' and not j['owner_active'] for j in result['scheduling']['jobs'].values())
+    assert research.run(tmp_path,sys.executable,episodes=3,rounds=2,staged=True,screen_incumbent=screen_incumbent)==result
+    assert len(ContractWorker.resets)==14+int(screen_incumbent)
+
+
+def test_native_reset_timeout_kills_owned_worker_and_blocks_reexecution(tmp_path, monkeypatch):
+    real_popen = subprocess.Popen
+    processes = []
+    def sleeper(command, **kwargs):
+        process = real_popen([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
+        processes.append(process)
+        return process
+    monkeypatch.setattr(trials.subprocess, "Popen", sleeper)
+    suite = trials.Suite(sys.executable, tmp_path / "native")
+    candidate = create_seed(tmp_path / "seed")
+    runtime = ExperimentRuntime(tmp_path / "experiments", device_registry=DeviceRegistry(tmp_path / "devices"))
+    trial = Trial("timeout", task=TASK, case=dict(seed=17), scope=SCOPE, budget=Budget(1, .5))
+    def run():
+        return runtime.run_trial(trial, environment=suite.environment(TASK),
+                                 policy=suite.policy(candidate, TASK), verifier=suite.verifier(TASK))
+    with pytest.raises(Cancelled):
+        run()
+    assert len(processes) == 1 and processes[0].poll() is not None
+    with pytest.raises(ReconciliationRequired):
+        run()
+    assert len(processes) == 1
+
+
+class RefinementContractWorker(ContractWorker):
+    success_height = .4
+    phase = 3
+    finger_position = .018
+    disturb_on_failure = True
+
+
+def test_native_feedback_contract_reuses_rejected_probe(tmp_path, monkeypatch):
+    monkeypatch.setattr(trials, 'NativeWorker', RefinementContractWorker)
+    RefinementContractWorker.resets=[]
+    result=research.run(tmp_path,sys.executable,episodes=3,rounds=2,feedback_search=True)
+    assert [r['outcome'] for r in result['rounds']]==['all_candidates_rejected','inherit_child']
+    fits=[read_json(p) for p in sorted((tmp_path/'campaign/rounds').glob('*/execution/search-fit.json'))]
+    assert [f['proposed_value'] for f in fits]==[.34,.445]
+    assert any(s['value']==.34 and s['source']['role']=='development_screening'
+               for s in fits[1]['samples'] if isinstance(s['source'],dict))
+    assert all(s['case']=={'seed':1000} for f in fits for s in f['samples'])
+    assert len(RefinementContractWorker.resets)==result['quota']['reserved_trials']==13
+    assert result['final_test']['metrics'][TASK]['success_rate']==1
+    assert result['qualification'] is None
+    assert result['scheduling']['used']=={'native_worker':0}
+    assert result['screening']['proposal_roles']==['development-scalar-refinement']
+    assert research.run(tmp_path,sys.executable,episodes=3,rounds=2,feedback_search=True)==result
+    assert len(RefinementContractWorker.resets)==13
+
+
+@pytest.mark.parametrize('aperture,disturbed,expected',[(.036,True,'insufficient'),(.08,True,'unresolved'),
+    (.0,True,'unresolved'),(.036,False,'unresolved'),(float('nan'),True,'unresolved')])
+def test_clearance_feedback_requires_grasp_and_disturbance(aperture,disturbed,expected):
+    from PhysicalRSI_demos.auto_engineering.feedback import ClearanceFeedback
+    value=dict(trial=dict(task=TASK,scope=SCOPE),outcome='failure',
+        verdict=dict(measurements=dict(checks=dict(obstacle_undisturbed=not disturbed))),
+        trajectory=[dict(native_rollout=[dict(phase=3,observation=dict(joint_positions=[0]*7+[aperture/2]*2))])])
+    assert ClearanceFeedback().classify(value)==expected
