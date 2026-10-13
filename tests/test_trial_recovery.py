@@ -351,3 +351,63 @@ def test_missing_receipt_cannot_replay_existing_execution(tmp_path, completed):
     with pytest.raises(ReconciliationRequired, match='Unpublished experiment'):
         runtime.run_trial(trial, **adapters)
     assert adapters['environment'].starts == before
+
+
+@pytest.mark.parametrize('task', ['axis', 'vector'])
+def test_screening_replacement_resumes_campaign_without_rerolling_completed_trials(tmp_path, monkeypatch, task):
+    from PhysicalRSI_demos.staged_evolution import CalibrationSearch
+
+    def setup():
+        return demo.setup(tmp_path, evolver_factory=CalibrationSearch, max_candidates=4,
+            scheduled_workers=1, screening_threshold=1.0, max_replacements=1, max_trials=23)
+
+    campaign, initial, suite, quota = setup()
+    reset = demo.Environment.reset
+
+    def crash(self, case, context):
+        if len(self.resets) >= 2 and self.task == task and case['target'][0] == 1:
+            self.resets.append((self.task, case))
+            raise RuntimeError('screening startup stopped')
+        return reset(self, case, context)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(demo.Environment, 'reset', crash)
+        with pytest.raises(RuntimeError, match='screening startup stopped'):
+            campaign.run(initial)
+    round_root = campaign.root / 'rounds/round-0001'
+    loop = campaign.build_loop(round_root / 'execution', read_json(round_root / 'context.json'))
+    evaluator = loop.evaluator
+    jobs = evaluator.scheduler.status()['jobs']
+    key = next(k for k, job in jobs.items() if job['state'] == 'needs_reconciliation')
+    candidate = jobs[key]['request']['payload']['candidate']
+    failed = next(p.parent for p in loop.root.glob('experiments/screening/**/receipt.json')
+                  if read_json(p)['state'] != 'completed')
+    before = {p.name: file_digest(p) for p in failed.iterdir() if p.is_file() and not p.name.endswith('.lock')}
+    proof = tmp_path / 'screening-stop.json'
+    atomic_json(proof, dict(quiescent=True, description='Synchronous reset exited before ready'))
+    audit = dict(operator='test-operator', reason='Stopped screening startup',
+                 evidence={str(proof): file_digest(proof)})
+    resets = len(suite.resets)
+    with pytest.raises(ReconciliationRequired):
+        evaluator.resume_screening_replacements(key, **audit)
+    assert len(suite.resets) == resets
+    reserved = quota.status()['reserved_trials']
+    replacement = evaluator.authorize_screening_replacement(candidate, output=loop.root,
+        run_id=failed.name, quiescent=True, **audit)
+    assert quota.status()['reserved_trials'] == reserved + 1
+    with pytest.raises(ValueError, match='handler identity'):
+        evaluator.resume_replacements(key, **audit)
+    resumed = evaluator.resume_screening_replacements(key, **audit)
+    assert evaluator.resume_screening_replacements(key, **audit) == resumed
+    assert len(suite.resets) == resets
+    result = campaign.run(initial)
+    report = campaign.report_test(initial)
+    assert [row['outcome'] for row in result['rounds']] == ['inherit_child', 'no_changed_candidate']
+    assert all(row['success_rate'] == 1 for row in report['metrics'].values())
+    assert len(suite.resets) == quota.status()['reserved_trials'] == 23
+    assert {name: file_digest(failed / name) for name in before} == before
+    assert Evaluation.read(ExperimentRuntime(failed.parent), replacement['run_id']).to_dict()['recovery']['original_id'] == failed.name
+    assert evaluator.scheduler.status()['used'] == {'cpu': 0}
+    restarted, seed, new_suite, new_quota = setup()
+    assert restarted.run(seed) == result and restarted.report_test(seed) == report
+    assert new_suite.resets == [] and new_quota.status() == quota.status()

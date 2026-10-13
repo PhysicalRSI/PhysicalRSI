@@ -315,6 +315,19 @@ evaluator.resume_replacements(
 result = campaign.run(initial)
 ```
 
+For a `MultiFidelityEvaluator` screening interruption, use
+`authorize_screening_replacement(candidate, output=round_root, run_id=logical_trial_id,
+failed_run_id=failed_execution_id, operator=operator_name, reason=reason,
+evidence=stopping_evidence_paths_and_hashes, quiescent=True)`, then
+`resume_screening_replacements(failed_job_id, operator=operator_name, reason=reason,
+evidence=stopping_evidence_paths_and_hashes)`, before calling `campaign.run(initial)`.
+The output is the round's execution root, just as for full validation; the API
+resolves the nested screening directory. The low-fidelity evaluator's frozen
+`max_replacements` applies. Screening and full validation share quota, but their
+queue handlers remain distinct and reject recovery through the wrong handler.
+Both use the same inactive-plan and authorization audit. A replacement screening
+measurement only decides admission; survivors still undergo full paired validation.
+
 Authorization does not execute adapters. It assigns a distinct Trial ID, retains
 the original failed directory, and owns copies of the failed specification,
 receipt, other retained files, stopping evidence and device reconciliation. The

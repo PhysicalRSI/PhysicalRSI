@@ -16,7 +16,7 @@ from ..embodiment import Revision, System2Trial
 from ..experiments import Budget, ExperimentRuntime, trial_adapters, trial_factory_kind
 from ..trials import Evaluation, Trial, task_case_identity
 from ..infra.storage import atomic_json, digest, file_digest, identifier, locked, read_json, relative_path
-from ..infra.trial_recovery import TrialRecovery, inactive
+from ..infra.trial_recovery import TrialRecovery, before_execution, inactive
 from . import now
 from .artifacts import verify_harness
 from .experiments import experiment_result, experiment_score
@@ -169,6 +169,32 @@ class ExperimentEvaluator:
         recovery = self._recovery(directory, plan)
         return [dict(row, logical_run_id=row['run_id'], **{
             k: v for k, v in recovery.resolve(row['run_id']).items()}) for row in plan['trials']]
+
+    def _replacement_plan(self, directory, plan):
+        """Audit an inactive plan before releasing its queue reservation."""
+        self._stable()
+        with inactive(directory / '.plan.lock'):
+            if read_json(directory / 'plan.json') != plan:
+                raise ValueError('Replacement plan changed')
+            self.quota.verify(self._reservations(directory, plan))
+            runtime = ExperimentRuntime(directory / 'trials', device_registry=self.device_registry)
+            authorizations, pending = [], 0
+            for row in self._execution_rows(directory, plan):
+                folder = runtime.root / row['run_id']
+                if row['replacement'] is not None:
+                    authorizations.append(row['replacement']['authorization_sha256'])
+                if (folder / 'receipt.json').exists():
+                    audited = runtime.read_evidence(row['run_id'])
+                    if audited['specification'].get('replacement') != row['replacement']:
+                        raise ValueError('Completed replacement differs from the frozen plan')
+                else:
+                    runtime.require_unstarted(row['run_id'], replacement=row['replacement'])
+                    pending += 1
+                    if row['replacement'] is not None:
+                        previous = read_json(folder / 'recovery/source/experiment.json')
+                        before_execution(folder, row['run_id'], dict(previous, replacement=row['replacement']), self.device_registry)
+            self._stable()
+            return dict(schema='physicalrsi.scheduled-replacements/v1', authorizations=sorted(authorizations), pending=pending)
 
     def authorize_replacement(self, candidate, *, output, split, run_id, failed_run_id=None,
                               operator, reason, evidence, quiescent):

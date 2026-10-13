@@ -9,7 +9,7 @@ import math
 from pathlib import Path
 
 from ..contracts import ReconciliationRequired
-from ..infra.storage import file_digest
+from ..infra.storage import file_digest, read_json
 from .artifacts import verify_harness
 from .evaluation import ExperimentEvaluator, freeze_json
 from .experiments import experiment_score
@@ -29,6 +29,17 @@ class _ScreeningJobs:
 
     def collect(self, payload):
         return self.evaluator.read_development(payload["candidate"], Path(payload["output"]))
+
+    def replacement_plan(self, payload):
+        low = self.evaluator
+        low._stable()
+        candidate = payload["candidate"]
+        output = low._output(payload["output"])
+        directory = low._directory(output, "development", candidate["id"])
+        saved = read_json(directory / "plan.json")
+        plan = low._plan(candidate["id"], verify_harness(candidate),
+                         low._cases(saved["cases"]), split="development")
+        return low._replacement_plan(directory, plan)
 
 
 class MultiFidelityEvaluator(ScheduledEvaluator):
@@ -88,6 +99,23 @@ class MultiFidelityEvaluator(ScheduledEvaluator):
         value = super().policy_identity()
         value["fidelity"]["screening"] = self.screening.policy_identity()
         return value
+
+    def authorize_screening_replacement(self, candidate, *, output, run_id,
+                                       failed_run_id=None, operator, reason, evidence, quiescent):
+        """Authorize a new cheap Trial under the frozen screening allowance."""
+        self._stable()
+        directory = self._output(output) / "experiments/screening/development"
+        result = self.screening.authorize_replacement(candidate, output=directory,
+            split="development", run_id=run_id, failed_run_id=failed_run_id,
+            operator=operator, reason=reason, evidence=evidence, quiescent=quiescent)
+        self._stable()
+        return result
+
+    def resume_screening_replacements(self, key, *, operator, reason, evidence):
+        """Resume only an inactive screening job with an authorized new Trial."""
+        self._stable()
+        return self.scheduler.resume_replacements(key, _ScreeningJobs(self.screening),
+            operator=operator, reason=reason, evidence=evidence)
 
     def _ranking_scores(self, episodes):
         """Normalize each task before weighting; case counts do not set weights."""

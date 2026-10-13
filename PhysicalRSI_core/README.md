@@ -58,6 +58,9 @@ an interrupted reset, `authorize_replacement` requires a stopped owner, declared
 stopping evidence and any device-lease reconciliation. It reserves an additional
 Trial and preserves the failed attempt under a new execution identity. Scheduled
 work additionally requires `resume_replacements`; neither call launches a worker.
+For `MultiFidelityEvaluator` screening jobs, use
+`authorize_screening_replacement` and `resume_screening_replacements`; the
+screening evaluator must declare its own replacement allowance.
 Completed outcomes and actions already dispatched cannot use this path. Missing
 receipts with retained execution evidence also block execution. See
 [explicit replacement](../docs/core-development.md#explicit-replacement-after-an-interrupted-reset)
