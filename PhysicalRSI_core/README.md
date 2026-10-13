@@ -183,3 +183,6 @@ contracts and fixed controller inputs condition usable observations. The
 objective is an explicit adapter; independent paired selection still controls
 inheritance. This is opt-in: the initial three-seed CPU comparison did not beat
 uniform search. See [adaptive parameter search](../docs/core-development.md#adaptive-parameter-search).
+`minimum_observations` optionally delays local sampling until enough distinct
+complete vectors are available. Its default remains `1`: the ten-seed warmup
+comparison added Trial cost without a clear quality gain over the previous policy.

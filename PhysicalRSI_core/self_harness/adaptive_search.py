@@ -46,9 +46,13 @@ def measurement_context(value):
 class AdaptiveParameterEvolver:
     def __init__(self,*,archive,space,objective,task_weights,population=6,seed=0,
                  elite_fraction=.25,exploration_fraction=.5,minimum_scale=.025,
-                 strategy='adaptive',stop_on_success=True):
+                 strategy='adaptive',stop_on_success=True,minimum_observations=1):
         if not isinstance(space,ParameterSpace):
             raise ValueError('Declare a ParameterSpace')
+        if minimum_observations is None:
+            minimum_observations=2*len(space.fields)+1
+        if type(minimum_observations) is not int or minimum_observations<1:
+            raise ValueError('Declare a positive integer minimum_observations')
         if (type(population) is not int or not 1<=population<=64 or type(seed) is not int
                 or not 0<finite(elite_fraction)<=1 or not 0<finite(exploration_fraction)<=1
                 or not 0<finite(minimum_scale)<=1 or strategy not in ('adaptive','uniform')
@@ -60,7 +64,7 @@ class AdaptiveParameterEvolver:
         finite(sum(self.weights.values()))
         self.settings=dict(population=population,seed=seed,elite_fraction=elite_fraction,
             exploration_fraction=exploration_fraction,minimum_scale=minimum_scale,strategy=strategy,
-            stop_on_success=stop_on_success)
+            stop_on_success=stop_on_success,minimum_observations=minimum_observations)
         self._identity=deepcopy(self.identity())
 
     def identity(self):
@@ -135,6 +139,7 @@ class AdaptiveParameterEvolver:
             score=sum(per_task[t]*w for t,w in self.weights.items())/sum(self.weights.values())
             ranked.append(dict(values=list(values),score=score,per_task=per_task,case_scores=means))
         ranked.sort(key=lambda r:(-r['score'],r['values']))
+        model_ready=len(ranked)>=self.settings['minimum_observations']
         elite=ranked[:max(1,math.ceil(len(ranked)*self.settings['elite_fraction']))]
         units=[self.space.unit(r['values']) for r in elite]
         center=[sum(v[i] for v in units)/len(units) for i in range(len(self.space.fields))] if units else self.space.unit(inspected['values'])
@@ -150,7 +155,10 @@ class AdaptiveParameterEvolver:
         else:
             seen={tuple(inspected['values']),*grouped.keys()}
             population=self.settings['population']
-            global_count=population if self.settings['strategy']=='uniform' else max(1,math.ceil(population*self.settings['exploration_fraction']))
+            global_only=self.settings['strategy']=='uniform' or not model_ready
+            global_count=population if global_only else max(1,math.ceil(population*self.settings['exploration_fraction']))
+            if self.settings['strategy']=='adaptive' and not model_ready:
+                reason='global_warmup'
             # A fixed attempt bound makes even an exhausted coarse grid terminate.
             for slot in range(population):
                 role='global' if slot<global_count else 'elite'
@@ -163,7 +171,7 @@ class AdaptiveParameterEvolver:
         report=dict(schema='physicalrsi.adaptive-parameter-fit/v1',identity=self.identity(),
             parent_sha256=verify_harness(parent),condition_sha256=inspected['condition_sha256'],
             archive_view_sha256=digest(search['view']),panel=panel,samples=samples,excluded=excluded,
-            ranked=ranked,incomplete=incomplete,elite=elite,center=center,scale=scale,
+            ranked=ranked,incomplete=incomplete,elite=elite,center=center,scale=scale,model_ready=model_ready,
             random_seed=rng_seed,proposals=proposals,reason=reason,qualification=None)
         output=Path(output)
         freeze_json(output/'adaptive-fit.json',report)

@@ -80,6 +80,14 @@ renames the completed directory before the lineage pointer advances. Existing
 snapshots are checked and never silently overwritten. Historical records with
 external roots remain readable under their original integrity checks.
 
+File permissions are not yet part of the declared content identity. A local
+fault-injection audit at
+`/cpfs02/user/yanming/physicalrsi-core-checks/harness-mode-audit-001`
+changed a captured script from mode 0755 to 0644: execution failed with EACCES,
+but content verification passed and restoration reported no repair. Binding
+executable modes and checking them throughout capture, mutation and recovery is
+an open P0 requirement; preserving modes while copying does not detect later drift.
+
 A completed paired comparison that retains its parent publishes an `assessment`
 lineage record. It advances the CAS revision and binds the full decision and
 evidence while preserving the same harness snapshot and `freeze_sha256`.
@@ -1075,6 +1083,15 @@ At each round the algorithm ranks complete observed parameter vectors, estimates
 an elite mean and diagonal spread, and proposes a bounded population. A fixed
 fraction samples the whole domain; the remainder samples near the elite set,
 with a declared minimum spread. Quantization respects the declared field grids.
+Local sampling also requires `minimum_observations` distinct, complete parameter
+vectors. Its default of `1` retains the earlier sampling policy. Opt into a warmup
+with an explicit positive integer, or pass `None` to use `2 * dimensions + 1`.
+While fewer complete vectors are available the whole population explores
+globally. Repeated receipts, partial task panels and incomparable observations
+cannot satisfy this threshold. This is an explicit exploration heuristic, not
+a confidence bound or a guarantee of geometric coverage. Every fit records
+`model_ready` and the effective threshold; changing it requires a new run because
+it is part of the evolver identity.
 Already observed vectors are skipped, and a fixed attempt budget prevents
 unbounded retries on a coarse or exhausted grid. A deterministic random seed,
 ranked observations, exclusions, fitted distribution and proposed vectors are
@@ -1137,3 +1154,42 @@ checks. The source and six byte-verified artifact archives are retained on CPFS;
 reopening archived runs requires restoring their original absolute roots.
 Final tests did not inform proposals. Future algorithm comparisons require a
 new preregistered protocol and untouched final cases.
+
+### Observed warmup comparison, 2026-10-13
+
+The follow-up at
+`/cpfs02/user/yanming/physicalrsi-core-checks/adaptive-warmup-001`
+preregistered seeds 10–19 and three arms: a five-vector warmup, the previous
+one-vector adaptive policy, and uniform search. Each arm retained four rounds,
+six candidates per round and a 228-Trial cap. Development, validation and final
+panels were new; the audit checked that neither their reset identities nor their
+effective displacement/load pairs repeated the preceding study. The first three
+global vectors matched across all arms in every round; warmup and uniform also
+shared all six first-round vectors.
+
+| Strategy | Mean final quality | Final successful cases | Actual Trials |
+| --- | --- | --- | --- |
+| Five-vector warmup | 0.8274 | 40/40 | 1,796 |
+| Previous adaptive policy | 0.8263 | 40/40 | 1,684 |
+| Uniform search | 0.8365 | 40/40 | 1,640 |
+
+Warmup's paired mean quality difference against the previous policy was +0.0011,
+with three wins, four losses and three ties across seeds. It used 112 additional
+Trials. Against uniform search the difference was -0.0090, with two wins, four
+losses and four ties. These descriptive results do not support changing the
+default sampling policy; `minimum_observations=1` remains the default and warmup
+is explicitly opt-in. Neither adaptive variant demonstrated an overall advantage
+over uniform search on this software workload. Actual consumption differs because
+screening determines which candidate pools receive paired validation.
+
+The retained experiment source manifest is
+`a7e71dbbb4301807b7c0748492ecbecf8742aadb3e5fde58206dc3f01d57de3c`.
+The study explicitly supplied every arm's threshold. The release preserves the
+one-vector API default; its function bodies match the measured implementation.
+Both source versions and the default-only change audit are retained separately.
+All 5,120 trajectories were reconstructed independently and all outcomes/scores
+recomputed. Thirty independent restarts prohibited reset and created zero Trials.
+All resource claims were released. `acceptance-audit.json`, `final-review.json`
+and the byte-verified CPFS artifact archives retain the evidence. Ten seeds and
+two software load tasks do not establish broad or native performance, and these
+final cases must not be reused as fresh held-out evidence.

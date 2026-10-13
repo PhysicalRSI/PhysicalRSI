@@ -75,8 +75,8 @@ def test_cpu_two_gain_search_uses_rejected_trajectories_and_restarts(tmp_path):
 def test_history_changes_elite_sampling_but_not_global_control_points(tmp_path):
     historical=candidate(tmp_path/'observed',(5.,3.))
     history=rows(historical,values(tmp_path/'history',historical))
-    current,args=build(tmp_path/'current-only')
-    informed,more=build(tmp_path/'history-aware',history=history)
+    current,args=build(tmp_path/'current-only',minimum_observations=1)
+    informed,more=build(tmp_path/'history-aware',history=history,minimum_observations=1)
     current.propose_from_archive(*args);informed.propose_from_archive(*more)
     a,b=(read_json(v[-1]/'adaptive-fit.json') for v in (args,more))
     assert a['random_seed']==b['random_seed']
@@ -84,6 +84,42 @@ def test_history_changes_elite_sampling_but_not_global_control_points(tmp_path):
     assert a['proposals'][:2]==b['proposals'][:2]
     assert a['proposals'][2:]!=b['proposals'][2:]
     assert b['elite'][0]['values']==[5.,3.]
+
+
+def test_sparse_feedback_uses_the_same_global_population_as_uniform_search(tmp_path):
+    adaptive,args=build(tmp_path/'adaptive',minimum_observations=None)
+    uniform,control=build(tmp_path/'uniform',strategy='uniform')
+    adaptive.propose_from_archive(*args);uniform.propose_from_archive(*control)
+    a,b=(read_json(v[-1]/'adaptive-fit.json') for v in (args,control))
+    assert adaptive.settings['minimum_observations']==5
+    assert uniform.settings['minimum_observations']==1
+    assert a['reason']=='global_warmup' and not a['model_ready']
+    assert a['proposals']==b['proposals']
+    assert all(p['role']=='global' for p in a['proposals'])
+
+
+def test_warmup_counts_distinct_complete_vectors_not_receipts(tmp_path):
+    history=[]
+    for i,point in enumerate(((5.,3.),(4.,3.),(6.,4.),(5.,4.))):
+        historical=candidate(tmp_path/('observed-'+str(i)),point)
+        history.extend(rows(historical,values(tmp_path/('history-'+str(i)),historical)))
+    incomplete,args=build(tmp_path/'incomplete',history=history[:-1]*3,minimum_observations=None)
+    informed,full=build(tmp_path/'complete',history=history,minimum_observations=None)
+    incomplete.propose_from_archive(*args);informed.propose_from_archive(*full)
+    a,b=(read_json(v[-1]/'adaptive-fit.json') for v in (args,full))
+    assert len(a['ranked'])==4 and len(a['incomplete'])==1
+    assert not a['model_ready'] and a['reason']=='global_warmup'
+    assert len(b['ranked'])==5 and b['model_ready']
+    assert b['reason']=='sample_development_distribution'
+    assert a['proposals'][:2]==b['proposals'][:2]
+    assert [p['role'] for p in b['proposals']]==['global','global','elite','elite']
+
+
+@pytest.mark.parametrize('minimum',[0,-1,True,False,1.5,float('nan'),'5'])
+def test_invalid_warmup_threshold_fails_before_execution(tmp_path,minimum):
+    with pytest.raises(ValueError,match='minimum_observations'):
+        AdaptiveParameterEvolver(archive=Archive(),space=space(),objective=demo.Objective(),
+            task_weights={t:1 for t in demo.TASKS},minimum_observations=minimum)
 
 
 @pytest.mark.parametrize('difference',['budget','environment','verifier','fixed'])
