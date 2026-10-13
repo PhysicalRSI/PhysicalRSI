@@ -220,6 +220,9 @@ candidate/split attribution in `physicalrsi.trial/v1`. `trials.Evaluation` reads
 verified runtime receipts into `physicalrsi.evaluation/v1`, including reset,
 actual observation/action trajectory, verdict, measurements and evidence hashes.
 Returned JSON is a copy; caller mutation cannot alter an existing value.
+Run IDs are unique within an `ExperimentRuntime` root. Paired candidates or
+different rounds can reuse the same local ID; cross-run reports must retain
+the runtime location and verified receipt identity instead of joining on ID alone.
 
 An environment may implement `export_evidence()` to return a mapping from
 relative artifact names to `{path, sha256}`. Before publishing completion the
@@ -347,7 +350,37 @@ for both scalar and structured-action tasks. They exercise the complete research
 campaign, candidate archive, held-out report, extra reservation and restart, plus
 live ownership, device reconciliation, repeated interruption, quota exhaustion,
 interrupted authorization publication and evidence corruption. These are software
-recovery checks; native simulator recovery needs its own frozen acceptance.
+recovery checks; native evidence is reported separately below.
+
+The recovery implementation published as `d6ccf65` passed 722 software tests.
+Four separate CPU campaigns covered interrupted development and validation
+for both action interfaces: 56 completed Trials, four interrupted attempts and
+eight successful final cases. A separate process resumed all four campaigns
+without new execution, preserving the bytes and modes of 1,280 evidence files.
+
+A native Isaac Sim 5.1 startup check then interrupted one owned worker after
+scene layout creation and before reset readiness. After checking process-group
+quiescence and reconciling its device lease, an explicitly authorized new Trial
+completed 1,576 physics steps and passed all seven transfer checks. Both attempts
+consumed reservations, and the original failure evidence remained unchanged.
+This used known development seed 5000 and fixed transit height 0.36 m; it proves
+the native replacement path, not generalization or a fix for the earlier USD
+crash.
+
+A separate two-round native campaign completed five full Trials (7,880 physics
+steps) and one deliberately interrupted validation startup, consuming six
+reservations. On validation seed 681000 the parent failed and the 0.36 m
+clearance candidate succeeded; selection inherited the child. The second round
+inherited both the selected harness and the updated research memory, succeeded
+on development, and retained the policy without a changed candidate. The final
+report on held-out seed 691000 succeeded (1/1). Independent calculations from
+the retained object measurements agreed with the seven task checks. This
+establishes native recovery and recursive state/memory integration for the
+declared control and small panels; it does not establish search superiority or
+benchmark-wide generalization. No model weights were updated.
+Evidence is retained under
+`physicalrsi-core-checks/native-trial-recovery-001/` (including `campaign-study/`) and
+`physicalrsi-core-checks/core-trial-recovery-002/`.
 
 `auto_engineering.research.setup()` exposes the same `max_replacements` option
 and `extra_trials` for explicit additional total Trial capacity. Both default
