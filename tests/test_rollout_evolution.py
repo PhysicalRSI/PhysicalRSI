@@ -63,3 +63,22 @@ def test_unknown_evolver_call_requires_provider_reconciliation(tmp_path):
     feedback = loop.proposer.develop(initial, loop.root)
     with pytest.raises(ReconciliationRequired, match="reconcile"):
         loop.proposer.resume_proposal_with_context(initial, feedback, context, loop.root)
+
+
+def test_unrepresentable_score_span_is_rejected_before_rollout(tmp_path, monkeypatch):
+    from PhysicalRSI_demos import rollout_evolution as demo
+    initialize = demo.SelfHarness
+
+    def overflowing_profile(*args, **kwargs):
+        kwargs['profile'] = deepcopy(kwargs['profile'])
+        for spec in kwargs['profile']['tasks'].values():
+            spec['score_range'] = [-1e308, 1e308]
+        return initialize(*args, **kwargs)
+
+    monkeypatch.setattr(demo, 'SelfHarness', overflowing_profile)
+    campaign, initial, suite, quota = setup(tmp_path)
+    with pytest.raises(ValueError, match='native score range'):
+        campaign.run(initial)
+    assert suite.resets == []
+    assert quota.status()['reserved_trials'] == 0
+    assert not (campaign.state.root / 'current.json').exists()

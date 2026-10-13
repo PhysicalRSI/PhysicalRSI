@@ -77,7 +77,7 @@ def validate_profile(profile):
         if type(spec["episodes"]) is not int or spec["episodes"] < 1:
             raise ValueError("Invalid cohort size")
         low, high = map(_number, spec["score_range"])
-        if low >= high:
+        if low >= high or not math.isfinite(high - low):
             raise ValueError("Invalid native score range")
         if not 0 <= _number(spec["maximum_regression"]) <= 1:
             raise ValueError("Invalid normalized regression limit")
@@ -290,8 +290,8 @@ def select_survivor(
         per_task = {task: float(mean(values)) for task, values in scores.items()}
         total_weight = sum(spec["weight"] for spec in tasks.values())
         metrics[name] = dict(
-            normalized_score=sum(per_task[t] * tasks[t]["weight"] for t in tasks)
-            / total_weight,
+            normalized_score=math.fsum(per_task[t] * (tasks[t]["weight"] / total_weight)
+                                       for t in tasks),
             per_task=per_task,
             success_rate={t: sum(v) / len(v) for t, v in success.items()},
         )

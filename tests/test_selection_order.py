@@ -87,3 +87,16 @@ def test_constant_cost_at_limit_is_not_rejected_by_aggregation(tmp_path, cost):
     selected = select_survivor(comparison, cohort, results, evidence_root=tmp_path)
     assert selected['metrics']['child']['mean_cost']['task']['energy'] == cost
     assert selected['decision'] == 'inherit_child'
+
+
+@pytest.mark.parametrize('weight', [1., 5e-324, 1e308])
+def test_relative_weight_scale_does_not_erase_measured_gain(tmp_path, weight):
+    comparison, cohort, results = paired_comparison(tmp_path, [.2], [.24])
+    comparison['profile']['tasks']['task']['weight'] = weight
+    cohort['comparison_sha256'] = digest(comparison)
+    for result in results:
+        result.update(comparison_sha256=digest(comparison), cohort_sha256=digest(cohort))
+    selected = select_survivor(comparison, cohort, results, evidence_root=tmp_path)
+    assert selected['metrics']['parent']['normalized_score'] == .2
+    assert selected['metrics']['child']['normalized_score'] == .24
+    assert selected['decision'] == 'inherit_child'

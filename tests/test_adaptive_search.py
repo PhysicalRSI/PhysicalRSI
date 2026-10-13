@@ -462,3 +462,20 @@ def test_independent_identical_rollouts_survive_deduplication_but_copies_do_not(
     assert len(fit['samples']) == 6  # Current panel plus two genuinely executed panels.
     assert len(fit['excluded']) == 2  # Only the copied first panel is redundant.
     assert all(row['reason'] == 'duplicate_observation' for row in fit['excluded'])
+
+
+@pytest.mark.parametrize('weight', [1., 5e-324, 5e307])
+def test_relative_weight_scale_preserves_feedback_contrast(tmp_path, weight):
+    observed = candidate(tmp_path / 'observed', (5., 3.))
+    history = rows(observed, values(tmp_path / 'history', observed))
+    parent = candidate(tmp_path / 'parent')
+    current = values(tmp_path / 'current', parent)
+    evolver = AdaptiveParameterEvolver(archive=Archive(history), space=space(),
+        objective=PanelObjective({'parent': .2, 'observed': .24}),
+        task_weights={t: weight for t in demo.TASKS}, population=4, minimum_observations=2)
+    output = tmp_path / 'proposal'
+    evolver.propose_from_archive(parent, current, dict(index=1), dict(view=dict(scope='software')), output)
+    fit = read_json(output / 'adaptive-fit.json')
+    assert [row['score'] for row in fit['ranked']] == [.24, .2]
+    assert fit['score_contrast'] and fit['model_ready']
+    assert any(row['role'] != 'global' for row in fit['proposals'])

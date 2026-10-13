@@ -131,7 +131,8 @@ class AdaptiveParameterEvolver:
             # archive iteration order differ; rounding must not create a signal.
             means={case:float(mean(scores)) for case,scores in cases.items()}
             per_task={t:float(mean(means[c] for c,p in panel.items() if p['task']==t)) for t in self.weights}
-            score=sum(per_task[t]*w for t,w in self.weights.items())/sum(self.weights.values())
+            total_weight=sum(self.weights.values())
+            score=math.fsum(per_task[t]*(w/total_weight) for t,w in self.weights.items())
             ranked.append(dict(values=list(values),score=score,per_task=per_task,case_scores=means))
         ranked.sort(key=lambda r:(-r['score'],r['values']))
         score_contrast=bool(ranked) and ranked[0]['score']>ranked[-1]['score']
