@@ -45,12 +45,69 @@ def rows(harness,evaluations):
     return [dict(candidate=harness,evaluation=v,archive_revision='history',role='development_screening',archive_evidence={}) for v in evaluations]
 
 
-def build(root,*,history=(),**kwargs):
+def build(root,*,history=(),objective=None,**kwargs):
     parent=candidate(root/'parent')
     current=values(root/'current',parent)
-    evolver=AdaptiveParameterEvolver(archive=Archive(history),space=space(),objective=demo.Objective(),
+    evolver=AdaptiveParameterEvolver(archive=Archive(history),space=space(),objective=objective or demo.Objective(),
         task_weights={t:1 for t in demo.TASKS},population=4,**kwargs)
     return evolver,(parent,current,dict(index=1),dict(view=dict(scope='software')),root/'proposal')
+
+
+class PanelObjective:
+    def __init__(self, scores=None, default=0.):
+        self.scores, self.default = scores or {}, default
+
+    def identity(self):
+        return dict(kind='declared-panel-objective', scores=self.scores, default=self.default)
+
+    def score(self, value):
+        return self.scores.get(value['trial']['system2']['candidate_id'], self.default)
+
+
+@pytest.mark.parametrize('score', [0., .5])
+def test_flat_feedback_keeps_global_exploration_without_arbitrary_elites(tmp_path, score):
+    history = []
+    for index, point in enumerate(((1., 7.), (7., 1.))):
+        previous = candidate(tmp_path / ('observed-' + str(index)), point)
+        history.extend(rows(previous, values(tmp_path / ('history-' + str(index)), previous)))
+    objective = PanelObjective(default=score)
+    adaptive, args = build(tmp_path / 'adaptive', history=history, objective=objective, minimum_observations=3)
+    uniform, control = build(tmp_path / 'uniform', history=history, objective=objective,
+                             minimum_observations=3, strategy='uniform')
+    adaptive.propose_from_archive(*args)
+    uniform.propose_from_archive(*control)
+    a, b = [read_json(v[-1] / 'adaptive-fit.json') for v in (args, control)]
+    assert len(a['ranked']) == 3 and not a['model_ready']
+    assert a['reason'] == 'flat_development_scores'
+    assert a['proposals'] == b['proposals']
+    assert all(row['role'] == 'global' for row in a['proposals'])
+
+
+def test_tied_elite_cutoff_includes_both_parameter_directions(tmp_path):
+    history = []
+    for name, point in [('tied-a', (1., 7.)), ('tied-b', (7., 1.)), ('inferior', (2., 2.))]:
+        previous = candidate(tmp_path / name, point)
+        history.extend(rows(previous, values(tmp_path / (name + '-trials'), previous)))
+    objective = PanelObjective({'tied-a': .8, 'tied-b': .8, 'inferior': .2})
+    evolver, args = build(tmp_path / 'study', history=history, objective=objective, elite_fraction=.25)
+    evolver.propose_from_archive(*args)
+    fit = read_json(args[-1] / 'adaptive-fit.json')
+    assert fit['model_ready']
+    assert {tuple(row['values']) for row in fit['elite']} == {(1., 7.), (7., 1.)}
+    assert fit['center'] == pytest.approx(space().unit([4., 4.]))
+
+
+@pytest.mark.parametrize('covariance', ['diagonal', 'full'])
+def test_single_elite_respects_minimum_exploration_scale(tmp_path, covariance):
+    previous = candidate(tmp_path / 'best', (5., 3.))
+    history = rows(previous, values(tmp_path / 'history', previous))
+    evolver, args = build(tmp_path / 'study', history=history,
+        objective=PanelObjective({'best': 1.}), minimum_scale=.6, covariance=covariance)
+    evolver.propose_from_archive(*args)
+    fit = read_json(args[-1] / 'adaptive-fit.json')
+    assert fit['model_ready'] and len(fit['elite']) == 1
+    assert fit['scale'] == [.6, .6]
+    assert all(fit['covariance'][i][i] >= .6**2 for i in range(2))
 
 
 def test_cpu_two_gain_search_uses_rejected_trajectories_and_restarts(tmp_path):

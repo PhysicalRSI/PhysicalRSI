@@ -1416,13 +1416,18 @@ an elite mean and diagonal spread, and proposes a bounded population. A fixed
 fraction samples the whole domain; the remainder samples near the elite set,
 with a declared minimum spread. Quantization respects the declared field grids.
 Local sampling also requires `minimum_observations` distinct, complete parameter
-vectors. Its default of `1` retains the earlier sampling policy. Opt into a warmup
-with an explicit positive integer, or pass `None` to use `2 * dimensions + 1`.
-While fewer complete vectors are available the whole population explores
-globally. Repeated receipts, partial task panels and incomparable observations
+vectors and an observed difference between their aggregate scores. The count
+threshold defaults to `1`; increase it explicitly, or pass `None` to use
+`2 * dimensions + 1`. While fewer complete vectors are available, or all their
+scores are equal, the whole population explores globally. A flat score panel
+does not provide an evidence-based direction for local search. All vectors tied
+at the elite cutoff are included, rather than selecting ties by coordinate order.
+The declared minimum spread also applies when only one elite is available.
+Repeated receipts, partial task panels and incomparable observations
 cannot satisfy this threshold. This is an explicit exploration heuristic, not
 a confidence bound or a guarantee of geometric coverage. Every fit records
-`model_ready` and the effective threshold; changing it requires a new run because
+`model_ready`, `score_contrast`, `elite_cutoff` and the effective threshold;
+changing the configuration requires a new run because
 it is part of the evolver identity.
 The optional `covariance="full"` mode preserves empirical correlations between
 elite parameters. It keeps the diagonal mode's marginal spreads, shrinks

@@ -131,12 +131,16 @@ class AdaptiveParameterEvolver:
             score=sum(per_task[t]*w for t,w in self.weights.items())/sum(self.weights.values())
             ranked.append(dict(values=list(values),score=score,per_task=per_task,case_scores=means))
         ranked.sort(key=lambda r:(-r['score'],r['values']))
-        model_ready=len(ranked)>=self.settings['minimum_observations']
-        elite=ranked[:max(1,math.ceil(len(ranked)*self.settings['elite_fraction']))]
+        score_contrast=bool(ranked) and ranked[0]['score']>ranked[-1]['score']
+        model_ready=len(ranked)>=self.settings['minimum_observations'] and score_contrast
+        elite_count=max(1,math.ceil(len(ranked)*self.settings['elite_fraction']))
+        elite_cutoff=ranked[elite_count-1]['score'] if ranked else None
+        # Equal measured scores do not justify preferring smaller coordinates.
+        elite=[row for row in ranked if row['score']>=elite_cutoff]
         units=[self.space.unit(r['values']) for r in elite]
         center=[sum(v[i] for v in units)/len(units) for i in range(len(self.space.fields))] if units else self.space.unit(inspected['values'])
         scale=[max(self.settings['minimum_scale'],math.sqrt(sum((v[i]-center[i])**2 for v in units)/len(units)))
-               if len(units)>1 else .25 for i in range(len(center))]
+               if len(units)>1 else max(self.settings['minimum_scale'],.25) for i in range(len(center))]
         covariance=[[scale[i]**2 if i==j else 0. for j in range(len(center))] for i in range(len(center))]
         factor=None
         if self.settings['covariance']=='full':
@@ -162,7 +166,8 @@ class AdaptiveParameterEvolver:
             global_only=self.settings['strategy']=='uniform' or not model_ready
             global_count=population if global_only else max(1,math.ceil(population*self.settings['exploration_fraction']))
             if self.settings['strategy']=='adaptive' and not model_ready:
-                reason='global_warmup'
+                reason=('global_warmup' if len(ranked)<self.settings['minimum_observations']
+                        else 'flat_development_scores')
             # A fixed attempt bound makes even an exhausted coarse grid terminate.
             for slot in range(population):
                 role='global' if slot<global_count else 'elite'
@@ -181,7 +186,8 @@ class AdaptiveParameterEvolver:
         report=dict(schema='physicalrsi.adaptive-parameter-fit/v1',identity=self.identity(),
             parent_sha256=verify_harness(parent),condition_sha256=inspected['condition_sha256'],
             archive_view_sha256=digest(search['view']),panel=panel,samples=samples,excluded=excluded,
-            ranked=ranked,incomplete=incomplete,elite=elite,center=center,scale=scale,model_ready=model_ready,
+            ranked=ranked,incomplete=incomplete,elite=elite,elite_cutoff=elite_cutoff,
+            center=center,scale=scale,model_ready=model_ready,score_contrast=score_contrast,
             covariance=covariance,covariance_factor=factor,
             random_seed=rng_seed,proposals=proposals,reason=reason,qualification=None)
         output=Path(output)
