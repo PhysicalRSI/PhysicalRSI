@@ -2238,3 +2238,27 @@ capability, or cross-task RSI. Further algorithm development needs broader
 development scenarios and independently frozen holdouts that distinguish
 adaptive proposals from global exploration, together with evaluation-cost
 measurements. These completed test cases must not become proposal feedback.
+
+### Optional lower-tail development ranking
+
+`AdaptiveParameterEvolver(lower_tail_fraction=0.5)` can rank proposals by the
+mean of the lowest-scoring half of the declared development cases within each
+task. The default `1.0` preserves mean-case ranking. Repeated observations are
+averaged per case first, so repeating an easy case does not increase its weight.
+A partially included boundary case contributes fractional mass; for example,
+scores `[0.2, 1.0]` with fraction `0.75` produce `(0.2 + 0.5*1.0)/1.5`.
+Declared task weights then combine these per-task scores as before.
+
+This option directs proposals toward weak scenarios when average performance
+would prefer an uneven candidate. It remains bound to complete, comparable
+development panels and the frozen evolver identity. Validation and test data
+remain excluded, and the independent inheritance and regression gates remain
+unchanged. It cannot recover omitted scenarios from a narrow case panel or
+establish an improvement over random search by itself. Native benchmark 004
+used the original mean ranking; its results do not validate this new option.
+
+The complete RAM-snapshot software suite passed 915 tests in 174.04 seconds.
+New cases exercise complete multi-task, multi-case Trial panels, ranking
+reversal, unequal repeat counts, fractional boundaries, flat scores and
+subnormal fractions. Evidence and snapshot hashes are retained in
+`/cpfs02/user/yanming/physicalrsi-core-checks/core-lower-tail-001`.

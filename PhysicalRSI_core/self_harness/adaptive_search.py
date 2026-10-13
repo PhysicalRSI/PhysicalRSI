@@ -5,6 +5,7 @@ repair classifier is required. Scores guide proposals, never inheritance.
 """
 from copy import deepcopy
 from itertools import chain
+from fractions import Fraction
 import math
 from pathlib import Path
 from random import Random
@@ -15,6 +16,22 @@ from .artifacts import verify_harness
 from .evaluation import freeze_json
 from .feedback_context import measurement_context
 from .search_space import ParameterSpace, finite
+
+
+def _lower_tail_mean(scores, fraction):
+    """Equal case mass, with a fractional boundary case and exact accumulation."""
+    scores = sorted(scores)
+    if fraction == 1:
+        return float(mean(scores))
+    mass = Fraction(fraction) * len(scores)
+    remaining, total = mass, Fraction(0)
+    for score in scores:
+        weight = min(remaining, 1)
+        total += weight * Fraction(score)
+        remaining -= weight
+        if not remaining:
+            break
+    return float(total / mass)
 
 
 def _cholesky(covariance):
@@ -36,7 +53,7 @@ class AdaptiveParameterEvolver:
     def __init__(self,*,archive,space,objective,task_weights,population=6,seed=0,
                  elite_fraction=.25,exploration_fraction=.5,minimum_scale=.025,
                  strategy='adaptive',stop_on_success=True,minimum_observations=1,covariance='diagonal',
-                 elite_weighting='uniform'):
+                 elite_weighting='uniform', lower_tail_fraction=1.):
         if not isinstance(space,ParameterSpace):
             raise ValueError('Declare a ParameterSpace')
         if minimum_observations is None:
@@ -45,6 +62,8 @@ class AdaptiveParameterEvolver:
             raise ValueError('Declare a positive integer minimum_observations')
         if elite_weighting not in ('uniform','fractional'):
             raise ValueError('Declare uniform or fractional elite weighting')
+        if not 0 < finite(lower_tail_fraction) <= 1:
+            raise ValueError('Declare a lower_tail_fraction in (0, 1]')
         if covariance not in ('diagonal','full'):
             raise ValueError('Declare diagonal or full proposal covariance')
         if (type(population) is not int or not 1<=population<=64 or type(seed) is not int
@@ -60,7 +79,7 @@ class AdaptiveParameterEvolver:
         self.settings=dict(population=population,seed=seed,elite_fraction=elite_fraction,
             exploration_fraction=exploration_fraction,minimum_scale=minimum_scale,strategy=strategy,
             stop_on_success=stop_on_success,minimum_observations=minimum_observations,covariance=covariance,
-            elite_weighting=elite_weighting)
+            elite_weighting=elite_weighting,lower_tail_fraction=lower_tail_fraction)
         self._identity=deepcopy(self.identity())
 
     def identity(self):
@@ -139,7 +158,9 @@ class AdaptiveParameterEvolver:
             # Exact-ratio accumulation preserves flat feedback when repeat counts or
             # archive iteration order differ; rounding must not create a signal.
             means={case:float(mean(scores)) for case,scores in cases.items()}
-            per_task={t:float(mean(means[c] for c,p in panel.items() if p['task']==t)) for t in self.weights}
+            per_task={t:_lower_tail_mean(
+                [means[c] for c,p in panel.items() if p['task']==t],
+                self.settings['lower_tail_fraction']) for t in self.weights}
             score=math.fsum(per_task[t]*w for t,w in weights.items())
             ranked.append(dict(values=list(values),score=score,per_task=per_task,case_scores=means))
         ranked.sort(key=lambda r:(-r['score'],r['values']))

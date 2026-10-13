@@ -84,6 +84,55 @@ class PanelObjective:
         return self.scores.get(value['trial']['system2']['candidate_id'], self.default)
 
 
+@pytest.mark.parametrize('fraction,expected', [(1., 'brittle'), (.75, 'robust'), (.5, 'robust')])
+def test_lower_tail_ranks_complete_multicase_development_panels(tmp_path, fraction, expected):
+    class CaseObjective(PanelObjective):
+        def score(self, value):
+            name = value['trial']['system2']['candidate_id']
+            if name == 'brittle':
+                return 1. if value['trial']['case']['target'] == 1. else .2
+            return .5 if name == 'robust' else .1
+
+    candidates = {name: candidate(tmp_path/name, point) for name, point in
+                  [('parent', (.3, .1)), ('brittle', (5., 3.)), ('robust', (3., 5.))]}
+    panels = {}
+    for name, harness in candidates.items():
+        panels[name] = [value for index, target in enumerate((1., 2.))
+                       for value in values(tmp_path/(name+'-case-'+str(index)), harness,
+                                           case=dict(initial=0., target=target))]
+    # Repeating one case must not give that scenario extra mass in the tail.
+    repeated = values(tmp_path/'repeated', candidates['brittle'],
+                      case=dict(initial=0., target=1.))
+    history = rows(candidates['brittle'], panels['brittle'] + repeated)
+    history += rows(candidates['robust'], panels['robust'])
+    evolver = AdaptiveParameterEvolver(archive=Archive(history), space=space(),
+        objective=CaseObjective(), task_weights={t:1 for t in demo.TASKS},
+        population=4, lower_tail_fraction=fraction)
+    output = tmp_path/'proposal'
+    evolver.propose_from_archive(candidates['parent'], panels['parent'], dict(index=1),
+                                 dict(view=dict(scope='software')), output)
+    fit = read_json(output/'adaptive-fit.json')
+    assert fit['ranked'][0]['values'] == space().inspect(candidates[expected])['values']
+    assert not fit['incomplete'] and fit['model_ready']
+    brittle = next(row for row in fit['ranked'] if row['values'] == [5., 3.])
+    assert brittle['score'] == pytest.approx({1.: .6, .75: .7/1.5, .5: .2}[fraction])
+    assert fit['identity']['settings']['lower_tail_fraction'] == fraction
+
+
+@pytest.mark.parametrize('fraction', [0, -1, 1.01, True, float('nan'), float('inf')])
+def test_invalid_lower_tail_fraction_is_rejected(tmp_path, fraction):
+    with pytest.raises(ValueError):
+        build(tmp_path, lower_tail_fraction=fraction)
+
+
+@pytest.mark.parametrize('fraction', [1., .75, .1, 5e-324])
+def test_lower_tail_preserves_flat_scores_and_fractional_boundary(fraction):
+    from PhysicalRSI_core.self_harness.adaptive_search import _lower_tail_mean
+    assert _lower_tail_mean([.3] * 7, fraction) == .3
+    assert _lower_tail_mean([1., .2], .75) == pytest.approx(.7/1.5)
+    assert _lower_tail_mean([1., .2], 5e-324) == .2
+
+
 @pytest.mark.parametrize('kind', ['adaptive', 'scalar'])
 @pytest.mark.parametrize('before,after', [(1, True), (True, 1), (1, 1.0), (False, 0)])
 def test_search_rejects_typed_provider_drift_before_reading_history(tmp_path, monkeypatch, kind, before, after):
