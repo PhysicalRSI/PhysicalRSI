@@ -137,6 +137,13 @@ reuses the exact assessment after interruption and does not rerun completed tria
 No-candidate and all-admission-rejected rounds have no complete paired scores;
 they retain their ordinary campaign/archive receipts without an assessment.
 
+Paired selection uses exact-ratio accumulation (`statistics.mean`) for normalized
+episode scores and measured costs before converting their means to floats.
+Constant costs at their declared limit remain admissible, including finite costs
+whose intermediate sum would overflow. Episode ordering cannot change these
+means; raw evidence hashes still preserve the submitted ordering. Promotion
+thresholds, statistical confidence rules and cost limits remain unchanged.
+
 ```python
 restored = state.rollback(
     expected=current_revision,

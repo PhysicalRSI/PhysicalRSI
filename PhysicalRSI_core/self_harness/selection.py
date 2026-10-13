@@ -9,6 +9,7 @@ separate prerequisites. No benchmark-specific names or score scales live here.
 import math
 from datetime import datetime, timezone
 from pathlib import Path
+from statistics import mean
 
 from PhysicalRSI_core.infra.storage import (
     atomic_json,
@@ -286,7 +287,7 @@ def select_survivor(
                 if value < 0:
                     raise ValueError("Measured cost must be nonnegative")
                 values.append(value)
-        per_task = {task: sum(values) / len(values) for task, values in scores.items()}
+        per_task = {task: float(mean(values)) for task, values in scores.items()}
         total_weight = sum(spec["weight"] for spec in tasks.values())
         metrics[name] = dict(
             normalized_score=sum(per_task[t] * tasks[t]["weight"] for t in tasks)
@@ -295,7 +296,7 @@ def select_survivor(
             success_rate={t: sum(v) / len(v) for t, v in success.items()},
         )
         if any(costs.values()):
-            metrics[name]["mean_cost"] = {task: {key: sum(values) / len(values)
+            metrics[name]["mean_cost"] = {task: {key: float(mean(values))
                                                for key, values in items.items()} for task, items in costs.items()}
     if len(revisions) != 1:
         raise ValueError("Mixed evaluator revisions")
