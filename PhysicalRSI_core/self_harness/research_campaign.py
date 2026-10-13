@@ -52,7 +52,7 @@ class ResearchCampaign:
                     budget=dict(max_rounds=self.max_rounds, remaining_rounds=self.max_rounds-index))
 
     def _stable(self):
-        if self.reflector.identity() != self.reflector_identity:
+        if digest(self.reflector.identity()) != digest(self.reflector_identity):
             raise ValueError("Frozen reflector identity changed")
 
     def _publish(self, body):

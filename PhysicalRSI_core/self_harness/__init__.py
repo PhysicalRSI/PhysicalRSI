@@ -101,7 +101,7 @@ class SelfHarness:
                                campaign_policy=self.policy, round_context=self.round_context)
         with locked(self.root / ".init.lock"):
             path = self.root / "config.json"
-            if path.exists() and read_json(path) != self.config:
+            if path.exists() and digest(read_json(path)) != digest(self.config):
                 raise ValueError("Frozen experiment configuration changed")
             atomic_json(path, self.config)
 
@@ -142,13 +142,13 @@ class SelfHarness:
                     evolution=self.evolution.identity())
 
     def _stable(self):
-        if read_json(self.root / "config.json") != self.config:
+        if digest(read_json(self.root / "config.json")) != digest(self.config):
             raise ValueError("Frozen experiment configuration changed")
-        if self.evolution.identity() != self.config["evolution"]:
+        if digest(self.evolution.identity()) != digest(self.config["evolution"]):
             raise ValueError("Frozen evolution specification changed")
-        if self.identities() != self.config["identities"]:
+        if digest(self.identities()) != digest(self.config["identities"]):
             raise ValueError("Executable port or core identity changed")
-        if self.round_context is not None and self._campaign_policy() != self.policy:
+        if self.round_context is not None and digest(self._campaign_policy()) != digest(self.policy):
             raise ValueError("Campaign policy changed")
 
     def _step(self, name, inputs, call, *, recover=None):

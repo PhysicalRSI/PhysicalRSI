@@ -316,6 +316,9 @@ so boolean, integer and floating-point substitutions cannot pass as unchanged
 configuration merely because Python considers their values equal.
 The same canonical identity comparison protects training coordinators and
 experience compilers, including resumed jobs and completed skill acknowledgements.
+Round configuration reopening, live port/evolution checks and research reflector
+checks also use canonical identity digests. A stored numeric/boolean type change
+is rejected without overwriting the conflicting configuration or spending Trials.
 A change before reservation blocks the whole plan; a change during adapter
 construction blocks reset while retaining the already charged reservation.
 

@@ -110,3 +110,30 @@ def test_evaluator_rejects_suite_identity_type_drift_before_sampling(tmp_path, m
     assert len(suite.resets) == quota.status()['reserved_trials'] == 1
     assert evaluator.development(parent, output) == result
     assert len(suite.resets) == 1
+
+
+@pytest.mark.parametrize('entry', ['reopen', 'run'])
+@pytest.mark.parametrize('weight', [True, 1.0])
+def test_round_rejects_typed_config_drift_without_overwriting(tmp_path, entry, weight):
+    from PhysicalRSI_core.infra.storage import atomic_json, read_json
+    campaign, parent, suite, quota = setup(tmp_path)
+    directory = tmp_path / 'loop'
+    loop = campaign.build_loop(directory)
+    loop.state.initialize(parent, policy=loop.policy, scope='software')
+    path = directory / 'config.json'
+    original = read_json(path)
+    changed = deepcopy(original)
+    changed['profile']['tasks']['counter']['weight'] = weight
+    assert changed == original
+    atomic_json(path, changed)
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match='Frozen experiment configuration changed'):
+        campaign.build_loop(directory) if entry == 'reopen' else loop.run()
+    assert path.read_bytes() == before
+    assert suite.resets == [] and quota.status()['reserved_trials'] == 0
+    atomic_json(path, original)
+    restored = campaign.build_loop(directory)
+    result = restored.run()
+    count = len(suite.resets)
+    assert count > 0 and restored.run() == result
+    assert len(suite.resets) == count

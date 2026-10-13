@@ -9,6 +9,26 @@ from PhysicalRSI_core.self_harness.bindings import validate_admission
 from PhysicalRSI_demos.recursive_research import setup
 
 
+def test_research_rejects_reflector_identity_type_drift_before_trials(tmp_path, monkeypatch):
+    from PhysicalRSI_demos.recursive_research import Reflector
+    settings = {'version': 1}
+    identity = Reflector.identity
+    monkeypatch.setattr(Reflector, 'identity', lambda self: dict(identity(self), settings=settings))
+    campaign, initial, suite, quota = setup(tmp_path, max_rounds=1)
+    settings['version'] = True
+    assert campaign.reflector.identity() == campaign.reflector_identity
+    with pytest.raises(ValueError, match='Frozen reflector identity changed'):
+        campaign.run(initial)
+    assert suite.resets == [] and campaign.reflector.calls == 0
+    assert quota.status()['reserved_trials'] == 0
+    settings['version'] = 1
+    result = campaign.run(initial)
+    count = len(suite.resets)
+    assert count > 0 and campaign.reflector.calls == 1
+    assert campaign.run(initial) == result
+    assert len(suite.resets) == count and campaign.reflector.calls == 1
+
+
 def test_three_rounds_learn_across_distinct_task_contracts_and_resume(tmp_path):
     campaign, initial, suite, quota = setup(tmp_path)
     result = campaign.run(initial)
