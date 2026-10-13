@@ -1952,3 +1952,28 @@ state counts and hashes of the crash evidence. The two completed final reports
 were joined back to candidate hashes, case hashes, receipt verdicts and all
 seven physical checks by the read-only comparator. No complete three-arm result
 or algorithm-superiority claim is available from this pilot.
+
+### Native render diagnostic and failure reporting, 2026-10-14
+
+`/cpfs02/user/yanming/physicalrsi-core-checks/native-render-diagnostic-001`
+tested pausing the timeline during render-only sensor warmup in an isolated
+source snapshot. It used a new development seed (2026101500), not a replacement
+for the interrupted benchmark. The paused variant reached warmup but timed out
+after 120 seconds with all three sensor arrays empty. Physics step 92 and time
+1.5333334133028984 were unchanged across warmup. Initialization adds steps before
+the explicit 90-step settling loop; absolute step 90 was an incorrect diagnostic
+assertion, although execution failed before reaching that assertion. The original
+variant was not dispatched because the diagnostic stopped on the first error.
+This experiment rejects the paused variant for this path; it does not establish
+the cause of the original native crash. No paused-render change was merged.
+
+The diagnostic also exposed a reporting problem: the worker printed the Python
+`TimeoutError`, but simulator shutdown returned status zero, leaving the parent
+with only an exited-before-readiness error. The worker now atomically publishes
+Python exception type and message in its owned IPC directory before shutdown.
+The parent checks this failure before accepting readiness or successful exit;
+unreported native failures include the process exit code. These failures remain
+uncertain Trials requiring reconciliation, without automatic retries or policy
+failure scores. Contract tests cover a real child process reporting an exception
+then exiting zero, failure precedence over readiness, and an unreported signal
+exit. They provide software evidence, not native crash-resolution evidence.

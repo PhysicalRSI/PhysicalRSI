@@ -68,11 +68,22 @@ class NativeWorker:
         while True:
             context.check()
             code = self.process.poll()
+            error_path = self.ipc / "error.json"
+            if error_path.exists():
+                error = read_json(error_path)
+                if (not isinstance(error, dict)
+                        or error.get("schema") != "physicalrsi.native-worker-error/v1"
+                        or not isinstance(error.get("error_type"), str)
+                        or not isinstance(error.get("message"), str)):
+                    raise RuntimeError("Malformed native worker failure: " + str(error_path))
+                raise RuntimeError("Native Isaac worker " + error["error_type"] + ": "
+                                   + error["message"] + "; inspect " + str(self.directory / "worker.log"))
             if path is not None and path.exists():
                 return read_json(path)
             if code is not None:
                 if code:
-                    raise RuntimeError("Native Isaac worker failed; inspect " + str(self.directory / "worker.log"))
+                    raise RuntimeError("Native Isaac worker exited with code " + str(code)
+                                       + "; inspect " + str(self.directory / "worker.log"))
                 if path is not None:
                     raise RuntimeError("Native worker exited before reset readiness")
                 return

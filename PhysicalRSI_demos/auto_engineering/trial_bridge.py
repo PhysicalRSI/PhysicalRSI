@@ -5,6 +5,13 @@ import time
 from PhysicalRSI_core.infra.storage import atomic_json, read_json
 
 
+def report_failure(directory, error):
+    """Persist Python failure before simulator shutdown can replace its exit code."""
+    atomic_json(Path(directory) / "error.json", dict(
+        schema="physicalrsi.native-worker-error/v1",
+        error_type=type(error).__name__, message=str(error)))
+
+
 def receive_plan(directory, observation, *, timeout):
     directory = Path(directory)
     atomic_json(directory / "ready.json", dict(ready=True, observation=observation))

@@ -199,11 +199,14 @@ def run(args):
             evidence={str(p.relative_to(out)):file_digest(p) for p in out.rglob('*') if p.is_file()})
         atomic_json(out/'result.json',result)
         print(json.dumps({'success':verdict['success'],'output':str(out),'checks':verdict['checks']}),flush=True)
-    except Exception:
+    except Exception as error:
         import traceback
         traceback.print_exc()
         import sys
         sys.stderr.flush()
+        if getattr(args, 'bridge', None):
+            from .trial_bridge import report_failure
+            report_failure(args.bridge, error)
         raise
     finally:app.close()
 

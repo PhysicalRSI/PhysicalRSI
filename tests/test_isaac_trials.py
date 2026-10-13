@@ -437,3 +437,57 @@ def test_native_cache_is_isolated_by_default(tmp_path):
     assert worker._prepare_cache() == tmp_path / 'native/runtime'
     assert worker.identity()['cache_root'] is None
     assert not (tmp_path / 'native').exists()
+
+
+def test_native_python_failure_survives_clean_worker_exit(tmp_path, monkeypatch):
+    real_popen = subprocess.Popen
+    processes = []
+    def failed_worker(command, **kwargs):
+        bridge = command[command.index('--bridge') + 1]
+        script = ('from PhysicalRSI_demos.auto_engineering.trial_bridge import report_failure; '
+                  'import sys; report_failure(sys.argv[1], TimeoutError("RGB-D sensors unavailable"))')
+        process = real_popen([sys.executable, '-c', script, bridge], **kwargs)
+        # Model Kit shutdown masking the original exception with exit status zero.
+        assert process.wait(timeout=10) == 0
+        processes.append(process)
+        return process
+    monkeypatch.setattr(trials.subprocess, 'Popen', failed_worker)
+    suite = trials.Suite(sys.executable, tmp_path / 'native')
+    candidate = create_seed(tmp_path / 'seed')
+    registry = DeviceRegistry(tmp_path / 'devices')
+    runtime = ExperimentRuntime(tmp_path / 'experiments', device_registry=registry)
+    trial = Trial('sensor-error', task=TASK, case=dict(seed=17), scope=SCOPE, budget=Budget(1, 30))
+    def run():
+        return runtime.run_trial(trial, environment=suite.environment(TASK),
+            policy=suite.policy(candidate, TASK), verifier=suite.verifier(TASK))
+    with pytest.raises(RuntimeError, match='TimeoutError: RGB-D sensors unavailable'):
+        run()
+    receipt = read_json(tmp_path / 'experiments/sensor-error/receipt.json')
+    assert receipt['state'] == 'needs_reconciliation'
+    assert registry.occupied()
+    with pytest.raises(ReconciliationRequired):
+        run()
+    assert len(processes) == 1
+
+
+def test_native_reported_error_takes_precedence_over_reset_readiness(tmp_path):
+    from types import SimpleNamespace
+    from PhysicalRSI_demos.auto_engineering.trial_bridge import report_failure
+    worker = trials.NativeWorker(sys.executable, tmp_path)
+    worker.directory = tmp_path
+    worker.ipc = tmp_path / 'ipc'
+    atomic_json(worker.ipc / 'ready.json', dict(ready=True, observation={}))
+    report_failure(worker.ipc, ValueError('invalid camera output'))
+    worker.process = SimpleNamespace(poll=lambda: 0)
+    with pytest.raises(RuntimeError, match='ValueError: invalid camera output'):
+        worker._wait(SimpleNamespace(check=lambda: None), path=worker.ipc / 'ready.json')
+
+
+def test_native_signal_exit_retains_exit_code_without_python_error(tmp_path):
+    from types import SimpleNamespace
+    worker = trials.NativeWorker(sys.executable, tmp_path)
+    worker.directory = tmp_path
+    worker.ipc = tmp_path / 'ipc'
+    worker.process = SimpleNamespace(poll=lambda: -11)
+    with pytest.raises(RuntimeError, match='exited with code -11'):
+        worker._wait(SimpleNamespace(check=lambda: None), path=worker.ipc / 'ready.json')
