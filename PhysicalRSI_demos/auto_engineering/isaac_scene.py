@@ -133,7 +133,8 @@ def run(args):
             for path,body in [('/World/BlueSample',tube),('/World/RedSample',other),('/World/Beaker',beaker)]:
                 poses[path]=[p.tolist() for p in body.get_world_pose()]
             return poses
-        for _ in range(90):world.step(render=True)
+        # Settle physics before the explicit static sensor capture below.
+        for _ in range(90):world.step(render=False, update_fabric=True)
         rgb,depth,presentation,sensor_warmup=initial_sensor_frames(world,overhead,view)
         stage.GetRootLayer().Export(str(out/'scene.usda'))
         Image.fromarray(presentation[...,:3].astype('uint8')).save(out/'overview.png')

@@ -2053,7 +2053,7 @@ sensor contract tests passed; the device registry was empty after the diagnostic
 
 ### Native observation repeatability finding, 2026-10-14
 
-The ongoing `native-matched-bench-003` freezes source `b810ea0`, sampler seed
+`native-matched-bench-003` froze source `b810ea0`, sampler seed
 20261018 and disjoint development/validation/test panels. During its adaptive
 arm, the initial harness on development seed 2026101800 passed all seven checks
 in round one but only one in round two. Both completed 1,576 physics steps.
@@ -2077,14 +2077,50 @@ was skipped. Round two joined four actual development receipts across three
 parameter vectors, including both conflicting incumbent measurements and both
 failed candidates. It proposed one global and one fitted candidate. This proves
 feedback use, not adaptive superiority. Outcome variation limits interpretation
-of single-run comparisons even when declared seeds match. The ongoing study
-has no final score yet and retains all measurements without replacement.
+of single-run comparisons even when declared seeds match. The study
+retains all measurements without replacement.
 The second-round global candidate `(0.430, 0.299)` passed all seven development
 checks; the fitted candidate `(0.135, 0.221)` passed three and failed the task.
 These six completed development Trials were independently geometry-audited.
 The successful proposal therefore came from global exploration, not the fitted
-distribution; validation and the full strategy comparison remain outstanding.
+distribution.
+
+The incumbent failed validation seeds 2026101803 and 2026101804, passing three
+and two checks respectively. The global candidate passed all seven checks on
+2026101803, but its 2026101804 worker exited with SIGSEGV (-11) during the
+90-step settling loop, before static sensor capture and policy dispatch. The
+Python stack again points to `World.step -> SimulationContext.step`, with
+`UsdGeomBBoxCache::SetTime` in the native stack. Disabling viewport updates did
+not eliminate the crash; its underlying cause remains unresolved.
+
+Execution stopped with nine completed Trials (three successes, six failures)
+and one `needs_reconciliation` Trial. Uniform search and every final test were
+unexecuted. No final score, complete validation comparison, or second-round
+inheritance is established. The owned driver and worker group were confirmed
+absent and the GPU compute-process list empty before reconciling the device
+lease. The uncertain Trial remains unchanged, and no replacement was run.
 
 Evidence under the study root: `first-round-archive-audit.json`,
 `round-two-feedback-audit.json`, `repeated-initial-observation-audit.json`,
-`replay-perception.py`, and `perception-replay-audit.json`.
+`replay-perception.py`, `perception-replay-audit.json`,
+`completed-measurement-audit.json`, `interruption-audit.json`, and
+`device-reconciliation.json`.
+
+### Physics-only settling diagnostic, 2026-10-14
+
+`native-settling-diagnostic-001` changed only the 90 settling steps to
+`world.step(render=False, update_fabric=True)`, plus a diagnostic counter probe.
+The native adapter now uses that settling path, followed by the existing static
+sensor capture. This avoids 90 full Kit updates during settling while retaining
+physics advancement and subsequent camera rendering. It is not a claim that
+the unresolved USD crash has been fixed.
+
+Two fresh development seeds (2026101900 and 2026101901), with fixed memory
+`(transit_height_m=0.418, grasp_depth_fraction=0.25)`, each passed seven
+independently recomputed checks and completed 1,576 rollout physics steps.
+Settling advanced the counter from 2 to 92, ending at 1.5333334133 seconds;
+static camera warmup preserved this state. Warmup took 65.83 and 66.26 seconds,
+and total Trial times were 233.46 and 234.02 seconds. The device registry was
+empty afterward. `measurement-audit.json` retains receipt hashes and raw-check
+verification. No speedup, rare-crash elimination, or benchmark improvement is
+established by these two successful diagnostic cases.
