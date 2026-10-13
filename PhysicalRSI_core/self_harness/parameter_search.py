@@ -12,6 +12,7 @@ from itertools import chain
 import json
 import math
 from pathlib import Path
+from statistics import mean
 
 from ..infra.storage import canonical, digest, file_digest, relative_path
 from .artifacts import CLOSURE, harness_identity, verify_harness
@@ -173,7 +174,7 @@ class ScalarRefinementEvolver:
         if targets and not contradictions:
             low = max(floor, *(v['lower_failed'] for v in brackets.values()))
             high = max(v['upper_satisfied'] if v['upper_satisfied'] is not None else ceiling for v in brackets.values())
-            proposed = round(sign * ((low + high) / 2), parameter.precision)
+            proposed = round(sign * float(mean((low, high))), parameter.precision)
             if sign * proposed <= low:
                 proposed = sign * high
             if low < sign * proposed <= ceiling:

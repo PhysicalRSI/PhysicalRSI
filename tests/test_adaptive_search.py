@@ -31,10 +31,10 @@ def space():
     return ParameterSpace([SearchField('control','control.json',(k,),.1,8) for k in ('proportional','damping')])
 
 
-def values(root,harness,*,tasks=demo.TASKS,steps=100,environment_factory=demo.Environment):
+def values(root,harness,*,tasks=demo.TASKS,steps=100,environment_factory=demo.Environment,case=None):
     suite=demo.Suite();result=[]
     for task in tasks:
-        trial=Trial('trial-'+task,task=task,case=dict(initial=0.,target=1.),scope='software',budget=Budget(steps,30),
+        trial=Trial('trial-'+task,task=task,case=case if case is not None else dict(initial=0.,target=1.),scope='software',budget=Budget(steps,30),
             system2=System2Trial(Revision('unit-development','1'),harness['id'],verify_harness(harness),'development'))
         result.append(ExperimentRuntime(root).evaluate(trial,environment=environment_factory(task,[]),
             policy=suite.policy(harness,task),verifier=suite.verifier(task)).to_dict())
@@ -479,3 +479,26 @@ def test_relative_weight_scale_preserves_feedback_contrast(tmp_path, weight):
     assert [row['score'] for row in fit['ranked']] == [.24, .2]
     assert fit['score_contrast'] and fit['model_ready']
     assert any(row['role'] != 'global' for row in fit['proposals'])
+
+
+def test_changed_development_cases_are_explicitly_excluded_before_scoring(tmp_path):
+    previous = candidate(tmp_path / 'previous', (5., 3.))
+    history = rows(previous, values(tmp_path / 'history', previous, case=dict(initial=0., target=2.)))
+
+    class CurrentPanelOnly(PanelObjective):
+        def score(self, value):
+            assert value['trial']['case']['target'] == 1., 'Out-of-panel feedback reached the objective'
+            return super().score(value)
+
+    evolver, args = build(tmp_path / 'study', history=history, objective=CurrentPanelOnly(default=.2),
+                         minimum_observations=2)
+    evolver.propose_from_archive(*args)
+    fit = read_json(args[-1] / 'adaptive-fit.json')
+    assert len(fit['samples']) == 2
+    assert len(fit['ranked']) == 1 and not fit['model_ready']
+    assert fit['reason'] == 'global_warmup'
+    assert len(fit['excluded']) == 2
+    assert all(row['reason'] == 'outside_current_development_panel' for row in fit['excluded'])
+    assert {row['trial_sha256'] for row in fit['excluded']} == {row['evaluation']['trial_sha256'] for row in history}
+    assert all(row['case']['target'] == 2. and row['source']['archive_revision'] == 'history'
+               for row in fit['excluded'])

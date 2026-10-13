@@ -291,3 +291,24 @@ def test_scalar_identity_binds_shared_feedback_context(tmp_path, monkeypatch):
                         if Path(path).name == 'feedback_context.py' else original(path))
     with pytest.raises(ValueError, match='implementation changed'):
         evolver.propose_from_archive(*args)
+
+
+@pytest.mark.parametrize('lower,upper,current,direction,expected', [
+    (1e308, 1.6e308, 1e308, 'increase', 1.3e308),
+    (-1.6e308, -1e308, -1e308, 'decrease', -1.3e308),
+    (-1e308, 1e308, -1e308, 'increase', 0.),
+])
+def test_finite_large_bracket_does_not_falsely_exhaust_search(tmp_path, lower, upper, current, direction, expected):
+    parent = candidate(tmp_path / 'parent', current)
+    evolver = ScalarRefinementEvolver(archive=UnitArchive([]), classifier=Feedback(),
+        parameter=ScalarParameter('control', 'control.json', ('iterations',), lower, upper,
+                                  precision=0, direction=direction))
+    output = tmp_path / 'proposal'
+    args = (parent, [sample(parent)], None, dict(view=dict(scope='software')), output)
+    children = evolver.propose_from_archive(*args)
+    report = read_json(output / 'search-fit.json')
+    assert report['reason'] == 'refine_observed_failure_bound'
+    assert report['proposed_value'] == expected
+    assert len(children) == 1
+    assert read_json(Path(children[0]['root']) / 'control.json')['iterations'] == expected
+    assert evolver.resume_proposal_from_archive(*args) == children

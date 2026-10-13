@@ -1303,6 +1303,11 @@ paths explicitly declared inside adapter identities remain bound. Different
 budgets remain different conditions, even when
 both executions terminated within those budgets.
 
+Scalar refinement computes bracket midpoints with exact-ratio averaging before
+rounding to the declared grid. Finite same-sign bounds cannot overflow during
+their addition and falsely report `declared_bound_exhausted`. Increasing,
+decreasing and cross-zero intervals retain the same directional and grid rules.
+
 Each current case freezes one measurement context. Duplicate current cases or
 unbound/changed experiment specifications fail before a proposal is published.
 Historical conditions that differ are recorded with
@@ -1479,6 +1484,12 @@ a confidence bound or a guarantee of geometric coverage. Every fit records
 `model_ready`, `score_contrast`, `elite_cutoff` and the effective threshold;
 changing the configuration requires a new run because
 it is part of the evolver identity.
+Archived cases outside the current development panel are explicitly listed in
+`excluded` with reason `outside_current_development_panel`, their task/case,
+Trial and receipt hashes, and archive origin. They never reach the objective or
+count toward model readiness. These early exclusions omit parameter values and
+measurement context because those are not inspected for an inapplicable case.
+This makes a return to global warmup after a case-panel change auditable.
 The optional `covariance="full"` mode preserves empirical correlations between
 elite parameters. It keeps the diagonal mode's marginal spreads, shrinks
 off-diagonal covariance terms by a fixed 10%, and samples through a Cholesky

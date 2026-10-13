@@ -86,12 +86,14 @@ class AdaptiveParameterEvolver:
                     or value['trial_sha256']!=digest(value['trial']) or value['trial']['scope']!=search['view']['scope']):
                 raise ValueError('Adaptive search requires attributed development Trials')
             case=digest({k:value['trial'][k] for k in ('task','case','scope')})
-            if not current and case not in panel:return
-            point=self.space.inspect(candidate)
-            condition=measurement_context(value)
             row=dict(source=source,trial_sha256=value['trial_sha256'],receipt_sha256=digest(value['receipt']),
                 task=value['trial']['task'],case=value['trial']['case'],case_sha256=case,
-                values=point['values'],measurement_context=condition,outcome=value['outcome'])
+                outcome=value['outcome'])
+            if not current and case not in panel:
+                excluded.append(dict(row,reason='outside_current_development_panel'));return
+            point=self.space.inspect(candidate)
+            condition=measurement_context(value)
+            row.update(values=point['values'],measurement_context=condition)
             if current:
                 if case in panel:raise ValueError('Current development has duplicate cases')
                 panel[case]=dict(task=value['trial']['task'],measurement_context=condition)
