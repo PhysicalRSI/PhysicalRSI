@@ -567,3 +567,48 @@ def test_empirical_screening_threshold_rejected_before_workspace_creation(tmp_pa
         empirical.setup(root, sys.executable, panels=dict(development=[1], validation=[[2]], test=[3]),
                         strategy='adaptive', seed=1, screening_minimum_success_rate=threshold)
     assert not root.exists()
+
+
+def test_empirical_cli_preparation_resume_and_frozen_invocation(tmp_path, monkeypatch, capsys):
+    from PhysicalRSI_demos.auto_engineering import empirical
+    monkeypatch.setattr(trials, 'NativeWorker', EmpiricalContractWorker)
+    EmpiricalContractWorker.resets = []
+    plan = tmp_path / 'plan.json'
+    options = dict(panels=dict(development=[100, 101], validation=[[200, 201]], test=[300, 301]),
+                   strategy='adaptive', seed=1, repetitions=2, screening_minimum_success_rate=.5)
+    atomic_json(plan, options)
+    root = tmp_path / 'workspace'
+    argv = ['--workspace', str(root), '--python', sys.executable, '--plan', str(plan)]
+    prepared = empirical.main([*argv, '--prepare-only'])
+    assert prepared['execution_started'] is False
+    assert prepared['quota'] == dict(max_trials=28, reserved_trials=0, remaining_trials=28)
+    assert EmpiricalContractWorker.resets == []
+    assert not (root / 'native').exists()
+    assert read_json(root / 'empirical-plan.json')['options'] == options
+    assert empirical.main([*argv, '--prepare-only']) == prepared
+    result = empirical.main(argv)
+    assert result['final_test']['metrics'][TASK]['planned'] == 4
+    assert result['final_test']['metrics'][TASK]['success_rate'] == 1
+    count = len(EmpiricalContractWorker.resets)
+    assert count == result['quota']['reserved_trials']
+    assert empirical.main(argv) == result
+    assert len(EmpiricalContractWorker.resets) == count
+    atomic_json(plan, dict(options, seed=2))
+    with pytest.raises(ValueError):
+        empirical.main([*argv, '--prepare-only'])
+    assert len(EmpiricalContractWorker.resets) == count
+    assert read_json(root / 'empirical-plan.json')['options'] == options
+    assert '"execution_started": false' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('plan', [[], {}, {'strategy': 'adaptive', 'seed': 1, 'panels': {}, 'unknown': 1},
+                                 {'workspace': 'elsewhere'}, {'python': 'elsewhere'}])
+def test_empirical_cli_malformed_plan_has_no_workspace(tmp_path, plan):
+    from PhysicalRSI_demos.auto_engineering import empirical
+    source = tmp_path / 'plan.json'
+    atomic_json(source, plan)
+    root = tmp_path / 'unused'
+    with pytest.raises(SystemExit) as caught:
+        empirical.main(['--workspace', str(root), '--python', sys.executable, '--plan', str(source), '--prepare-only'])
+    assert caught.value.code == 2
+    assert not root.exists()

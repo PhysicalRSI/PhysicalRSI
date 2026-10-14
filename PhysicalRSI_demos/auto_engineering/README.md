@@ -189,3 +189,55 @@ for the exact split protocol and limitations.
   --isaac-python /path/to/isaac51/bin/python --episodes 3 --rounds 2 \
   --device-registry /path/to/shared-local-device-registry
 ```
+
+## Declared two-parameter empirical search
+
+The empirical path explores carrying height and grasp depth using archived
+native development measurements. It supports adaptive or uniform proposals,
+explicit per-round validation panels, repeated execution, and preregistered
+screening thresholds. Create a JSON plan such as:
+
+```json
+{
+  "strategy": "adaptive",
+  "seed": 20261028,
+  "population": 2,
+  "repetitions": 2,
+  "screening_minimum_success_rate": 0.5,
+  "shared_cache": true,
+  "panels": {
+    "development": [1000, {"seed": 1001, "scenario": "tall-obstacle"}],
+    "validation": [[2000, {"seed": 2001, "scenario": "tall-obstacle"}],
+                   [2010, {"seed": 2011, "scenario": "tall-obstacle"}]],
+    "test": [3000, {"seed": 3001, "scenario": "tall-obstacle"}]
+  }
+}
+```
+
+Prepare a new workspace and inspect its Trial allowance without launching
+Isaac or reserving any executions:
+
+```bash
+python -m PhysicalRSI_demos.auto_engineering.empirical \
+  --workspace /path/to/empirical-search \
+  --python /path/to/isaac-env/bin/python \
+  --plan /path/to/plan.json --prepare-only
+```
+
+The example declares a maximum of 52 Trials. Remove `--prepare-only` to run
+search followed by the held-out final test. Repeating the same command reuses
+completed evidence; uncertain executions require reconciliation through the
+core APIs. The command freezes the exact JSON options, launcher digest and
+demo source digests in `empirical-plan.json`; changed declarations require a
+new workspace. Use a fixed source checkout for reproducible core behavior.
+Preparation inspects configuration and budget, not native runtime readiness.
+On an existing workspace, the returned quota includes previous reservations.
+
+A threshold of 0.5 only admits partial development results to independent
+validation; full-success promotion and the seven final task checks remain
+unchanged. Repeated executions count against the allowance and do not create
+additional independent cases. To share a GPU with other cooperating runs,
+include the same `device_registry` path and `resource` name in every plan.
+This command runs one search arm; multi-arm studies must freeze matching
+plans and defer all final tests until their searches are complete using the
+`setup` API and `ResearchCampaign.report_test` separately.

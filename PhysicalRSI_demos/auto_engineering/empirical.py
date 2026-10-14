@@ -145,3 +145,48 @@ def run(workspace, python, **options):
     campaign, initial, quota = setup(workspace, python, **options)
     result = campaign.run(initial)
     return dict(result, final_test=campaign.report_test(initial), quota=quota.status(), qualification=None)
+
+
+def main(argv=None):
+    """Run a declared search arm, or prepare it without dispatching Trials."""
+    import argparse
+    import inspect
+    import json
+    from PhysicalRSI_core.self_harness.evaluation import freeze_json
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--workspace', required=True)
+    parser.add_argument('--python', required=True, help='Isaac Sim 5.1 Python launcher')
+    parser.add_argument('--plan', required=True, help='JSON object of setup options, including panels, strategy and seed')
+    parser.add_argument('--prepare-only', action='store_true', help='Freeze the plan and inspect quota without executing Trials')
+    args = parser.parse_args(argv)
+    try:
+        options = json.loads(Path(args.plan).read_text())
+        if not isinstance(options, dict):
+            raise ValueError('The search plan must be a JSON object')
+        inspect.signature(setup).bind(args.workspace, args.python, **options)
+    except (OSError, ValueError, TypeError) as error:
+        parser.error(str(error))
+    root = Path(args.workspace).resolve()
+    declaration = dict(schema='physicalrsi.native-empirical-cli-plan/v1', options=options,
+                       python=str(Path(args.python).expanduser().absolute()),
+                       executable_sha256=r.file_digest(Path(args.python).expanduser().absolute()),
+                       implementation=r.implementation())
+    plan_path = root / 'empirical-plan.json'
+    if plan_path.exists():
+        # Reject a changed invocation before setup can touch its stores.
+        freeze_json(plan_path, declaration)
+    campaign, initial, quota = setup(root, args.python, **options)
+    freeze_json(plan_path, declaration)
+    if args.prepare_only:
+        result = dict(state='prepared', execution_started=False,
+                      initial_harness_sha256=r.verify_harness(initial), quota=quota.status(), qualification=None)
+    else:
+        research = campaign.run(initial)
+        result = dict(research, final_test=campaign.report_test(initial), quota=quota.status(), qualification=None)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return result
+
+
+if __name__ == '__main__':
+    main()
