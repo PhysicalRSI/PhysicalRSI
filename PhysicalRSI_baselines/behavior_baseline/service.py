@@ -16,11 +16,14 @@ from PhysicalRSI_core.infra.storage import atomic_json, locked, read_json
 from PhysicalRSI_core.self_harness.artifacts import verify_harness
 from .native import probe_policy, runtime_environment
 from .diagnostics import validate_binding
+from .openpi_backend import supported_tasks
 
 
-def command(python, candidate_path, *, port, episode_seconds, development_binding=None, development_trace=None):
+def command(python, candidate_path, *, port, episode_seconds, development_binding=None, development_trace=None, task=None):
     argv = [str(python), "-m", "PhysicalRSI_baselines.behavior_baseline.serve", str(candidate_path),
             "--host", "127.0.0.1", "--port", str(port), "--episode-seconds", str(episode_seconds)]
+    if task is not None:
+        argv += ["--task", task]
     if development_binding is not None:
         argv += ["--development-binding", str(development_binding), "--development-trace", str(development_trace)]
     return argv
@@ -61,7 +64,7 @@ def policy_service(runtime, candidate_path, folder, *, python, task, port=8000,
     candidate = read_json(candidate_path)
     revision = verify_harness(candidate)
     backend = read_json(Path(candidate["root"]) / "backend.json")
-    if backend.get("task") != task or backend.get("kind") != "openpi-b1k/v1":
+    if task not in supported_tasks(backend):
         raise ValueError("Service must match the candidate's OpenPI task binding")
     folder = Path(folder).resolve()
     diagnostic_case = (validate_binding(development_binding, candidate_sha256=revision, task=task)
@@ -75,7 +78,7 @@ def policy_service(runtime, candidate_path, folder, *, python, task, port=8000,
     diagnostic_args = (dict(development_binding=folder / "development-binding.json",
                             development_trace=folder / "development.jsonl")
                        if diagnostic_case is not None else {})
-    argv = command(python, candidate_path, port=port, episode_seconds=episode_seconds, **diagnostic_args)
+    argv = command(python, candidate_path, port=port, episode_seconds=episode_seconds, task=task, **diagnostic_args)
     with locked(folder / ".lock"):
         state_path = folder / "service.json"
         if state_path.exists():

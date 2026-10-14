@@ -15,6 +15,42 @@ TOKENIZER = dict(uri="gs://big_vision/paligemma_tokenizer.model",
                  sha256="8986bb4f423f07f8c7f70d0dbe3526fb2316056c17bae71b1ea975e77a168fc6")
 
 
+
+def supported_tasks(specification):
+    """Declared task coverage, not evidence of task competence."""
+    kind = specification.get("kind")
+    if kind == "champion-pi05-b1k/v1":
+        from .champion_backend import supported_tasks as champion_tasks
+        return champion_tasks(specification)
+    if kind == "openpi-b1k/v1":
+        task = specification.get("task")
+        if not isinstance(task, str) or not task or "task_prompts" in specification:
+            raise ValueError("Declare exactly one legacy task")
+        return frozenset([task])
+    if kind != "openpi-b1k-multitask/v1" or "task" in specification:
+        raise ValueError("Unsupported or ambiguous OpenPI task binding")
+    prompts = specification.get("task_prompts")
+    if (not isinstance(prompts, dict) or not prompts
+            or any(not isinstance(k, str) or not k or not isinstance(v, str) or not v.strip()
+                   for k, v in prompts.items())):
+        raise ValueError("Pin a nonempty prompt for every declared task")
+    asset = specification.get("asset_id")
+    if not isinstance(asset, str) or not asset:
+        raise ValueError("Declare the shared normalization asset")
+    relative_path(asset)
+    if "assets/" + asset + "/norm_stats.json" not in specification.get("checkpoint_files", {}):
+        raise ValueError("Shared checkpoint lacks declared normalization assets")
+    return frozenset(prompts)
+
+
+def select_task(specification, task=None):
+    tasks = supported_tasks(specification)
+    task = specification.get("task") if task is None else task
+    if task not in tasks:
+        raise ValueError("Explicit served task must belong to frozen checkpoint coverage")
+    return task
+
+
 def verify_tokenizer(specification):
     """Require the pinned public tokenizer in OpenPI's actual download cache."""
     if specification.get("tokenizer") != TOKENIZER:
@@ -48,9 +84,10 @@ def baseline_observation(public):
 
 
 class OpenPIBackend:
-    def __init__(self, specification):
+    def __init__(self, specification, *, task=None):
         self.specification = deepcopy(specification)
-        if specification["kind"] != "openpi-b1k/v1" or specification["source_revision"] != OPENPI_REVISION:
+        self.task = select_task(specification, task)
+        if specification["source_revision"] != OPENPI_REVISION:
             raise ValueError("Use the inspected official BEHAVIOR baseline revision")
         if specification["adapter_sha256"] != file_digest(Path(__file__)):
             raise ValueError("Action adapter implementation differs from the frozen backend")
@@ -80,11 +117,15 @@ class OpenPIBackend:
         from openpi.training import config
         if not Path(openpi.__file__).resolve().is_relative_to(source):
             raise ValueError("Imported OpenPI differs from the pinned checkout")
-        task = specification["task"]
-        prompt = TASK_REGISTRY["b1k"][task]
+        task = self.task
+        prompt = (specification["task_prompts"][task] if "task_prompts" in specification
+                  else TASK_REGISTRY["b1k"][task])
         cfg = config.get_config(specification["training_config"])
         cfg = dataclasses.replace(cfg, data=dataclasses.replace(
             cfg.data, repo_id=specification["repo_id"], robot_config_name="b1k/R1Pro"))
+        if "asset_id" in specification:
+            cfg = dataclasses.replace(cfg, data=dataclasses.replace(
+                cfg.data, assets=config.AssetsConfig(asset_id=specification["asset_id"])))
         model = policy_config.create_trained_policy(cfg, str(checkpoint), default_prompt=prompt)
         self.wrapper = B1KPolicyWrapper(model, "b1k/R1Pro", prompt,
                                        specification["control_mode"], specification["action_horizon"],
@@ -94,7 +135,7 @@ class OpenPIBackend:
         return dict(deepcopy(self.specification), adapter_sha256=file_digest(Path(__file__)))
 
     def reset(self, task):
-        if task != self.specification["task"]:
+        if task != self.task:
             raise ValueError("Served checkpoint/task binding differs from the requested episode")
         self.wrapper.reset()
 

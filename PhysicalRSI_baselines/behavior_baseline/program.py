@@ -102,9 +102,15 @@ class ProgramPolicy:
                              if self.diagnostics is not None else None)
         primitive_actions = []
 
-        def primitive(onboard):
+        def primitive(onboard, *, execution_mode=None):
             context.check()
-            result = self.backend.act(deepcopy(onboard), context)
+            if execution_mode is None:
+                result = self.backend.act(deepcopy(onboard), context)
+            else:
+                execute = getattr(self.backend, "act_with_execution", None)
+                if execute is None:
+                    raise ValueError("This backend does not expose execution modes")
+                result = execute(deepcopy(onboard), context, execution_mode=execution_mode)
             context.check()
             action = validate_action(result, batch_size=batch_size)
             if self.diagnostics is not None:

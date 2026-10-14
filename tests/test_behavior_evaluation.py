@@ -1,4 +1,5 @@
 """Software integration fixtures; no simulator or benchmark qualification."""
+from pathlib import Path
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -183,3 +184,41 @@ def test_task_bound_checkpoint_cannot_shrink_a_larger_comparison(tmp_path, monke
         evaluator.validation(comparison, output)
     assert evaluator.quota.status()['reserved_trials'] == 0
     assert events == []
+
+
+def test_multitask_plan_reserves_every_declared_case_without_shrinking(tmp_path, monkeypatch):
+    evaluator, candidates, comparison, output, events = setup(tmp_path, monkeypatch, quota_limit=4)
+    for candidate in candidates:
+        path = Path(candidate['root']) / 'backend.json'
+        atomic_json(path, dict(kind='openpi-b1k-multitask/v1',
+            task_prompts={'turning_on_radio': 'turn on radio', 'opening_drawer': 'open drawer'},
+            asset_id='full100', checkpoint_files={'assets/full100/norm_stats.json': 'fixture'}))
+        for component in candidate['components'].values():
+            if 'backend.json' in component: component['backend.json'] = file_digest(path)
+        assert evaluator.admit(candidate, output)['accepted']
+    cases={task:[dict(task=task,mode='train',instance_id=0,instance_index=0,rollout_id=0)]
+           for task in ('turning_on_radio','opening_drawer')}
+    plan=evaluator._plan(output,{c['id']:verify_harness(c) for c in candidates},cases,'development')
+    assert len(plan.plan['trials'])==4
+    assert {(r['inputs']['system2']['candidate_id'],r['inputs']['task']) for r in plan.plan['trials']} == {
+        (name,task) for name in ('parent','child') for task in cases}
+    assert evaluator.quota.status()['reserved_trials']==4 and events==[]
+
+
+def test_group_option_routes_validation_and_preserves_single_case_development(tmp_path, monkeypatch):
+    from PhysicalRSI_baselines.behavior_baseline.grouped import GroupedNativeTrials
+    from PhysicalRSI_baselines.behavior_baseline.trials import NativeTrials
+
+    original, candidates, comparison, output, _ = setup(tmp_path, monkeypatch)
+    evaluator = NativeEvaluator(tmp_path, protocol=original.protocol, admission=original.admission,
+        quota=original.quota, python=original.python, system2=original.system2,
+        scope='software-fixture', native_group_size=2)
+    candidate = candidates[0]
+    evaluator.admit(candidate, output)
+    revisions = {candidate['id']: verify_harness(candidate)}
+    cases = {'turning_on_radio': [dict(instance_index=0)]}
+    development = evaluator._plan(output, revisions, cases, 'development')
+    validation = evaluator._plan(output, revisions, cases, 'validation', comparison, {'fixture': True})
+    assert type(development) is NativeTrials
+    assert type(validation) is GroupedNativeTrials
+    assert evaluator.identity() != original.identity()

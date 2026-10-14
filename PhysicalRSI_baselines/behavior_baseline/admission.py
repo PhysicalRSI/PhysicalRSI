@@ -12,7 +12,7 @@ import subprocess
 from PhysicalRSI_core.infra.storage import digest, file_digest, read_json, relative_path
 from PhysicalRSI_core.self_harness.artifacts import CLOSURE, verify_harness
 from PhysicalRSI_core.self_harness.evaluation import freeze_json
-from . import engine, openpi_backend
+from . import engine, openpi_backend, champion_backend
 
 CHECKS = {'onboard_observations_only', 'native_controls_only', 'no_privileged_state_access',
           'no_evaluation_feedback_during_episode', 'no_runtime_program_rewriting'}
@@ -33,7 +33,8 @@ class ReviewedAdmission:
         return dict(kind='behavior-reviewed-admission/v1', reference=self.reference_revision,
             reviews=str(self.reviews), evidence=self.evidence, tokenizer=str(self.tokenizer),
             checks=sorted(CHECKS), implementations={p.name: file_digest(p) for p in
-                (Path(__file__), Path(engine.__file__), Path(openpi_backend.__file__))})
+                (Path(__file__), Path(engine.__file__), Path(openpi_backend.__file__),
+                 Path(champion_backend.__file__))})
 
     def check(self, candidate, directory):
         if self.identity() != self._identity or verify_harness(self.reference) != self.reference_revision:
@@ -65,9 +66,14 @@ class ReviewedAdmission:
                     raise ValueError('Admission prerequisite evidence changed')
                 bound[path] = sha
             backend = read_json(Path(candidate['root']) / 'backend.json')
-            if (backend.get('kind') != 'openpi-b1k/v1'
-                    or backend.get('source_revision') != openpi_backend.OPENPI_REVISION
-                    or backend.get('adapter_sha256') != file_digest(Path(openpi_backend.__file__))
+            openpi_backend.supported_tasks(backend)
+            champion = backend.get('kind') == champion_backend.KIND
+            if champion:
+                champion_backend.verify(backend)
+            expected_revision = champion_backend.SOURCE_REVISION if champion else openpi_backend.OPENPI_REVISION
+            expected_adapter = champion_backend if champion else openpi_backend
+            if (backend.get('source_revision') != expected_revision
+                    or backend.get('adapter_sha256') != file_digest(Path(expected_adapter.__file__))
                     or backend.get('tokenizer') != openpi_backend.TOKENIZER):
                 raise ValueError('Unexpected fixed official action backend')
             source = Path(backend['source_root']).resolve()

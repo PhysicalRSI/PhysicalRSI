@@ -1,5 +1,80 @@
 # BEHAVIOR baseline and RSI research
 
+## Published champion parent
+
+The current research direction starts from the released 2025 champion's
+`checkpoint_2` for `turning_on_radio`, using its original stage tracking,
+inpainting, action compression and correction rules. This is a different
+foundation from the 2026 starter radio checkpoint used in the earlier rounds.
+Its reported 2025 result is not a measured 2026 result.
+
+Champion inference restores the local Orbax checkpoint in bounded host tiles
+onto one GPU, preserving the factory's bf16 parameter conversion, model
+construction and transforms. The engine manifest binds the loader and copied
+factory sources. This path requires a local OCDBT checkpoint and a single
+destination device; it is not a distributed training loader. Requested tile
+size does not bound total process memory because storage chunks, compilation
+and simulator allocations also consume memory. Parameter equality does not
+guarantee bitwise action reproducibility across processes. A changed engine
+requires a newly frozen parent and fresh paired evaluation; historical scores
+must remain attributed to their original engine.
+
+`champion_observation.py` maps the public 2026 joint fields into the legacy
+2025 proprioception layout. All unused legacy coordinates remain zero. The
+model receives onboard RGB, joint state and the fixed task identifier; it
+does not receive simulator-only state or scoring feedback.
+
+Materialize a parent after the published checkpoint has been verified:
+
+```bash
+python -m PhysicalRSI_baselines.behavior_baseline.champion_seed /tmp/champion-parent \
+  --task turning_on_radio \
+  --source /path/to/pinned/behavior-1k-solution \
+  --checkpoint /path/to/checkpoint_2 \
+  --utility /path/to/pinned/2025/eval_utils.py \
+  --transport /path/to/pinned/2026/websocket_b1k_server.py \
+  --environment-manifest /path/to/environment.txt
+```
+
+The optional `--task` selects one of the 16 published `checkpoint_2` tasks;
+its exact legacy task ID is frozen into the candidate. Each candidate still
+serves only one task. This software route does not establish competence on
+the other 15 tasks or cover the 50 tasks added in 2026.
+
+When serving with a validated development binding and trace destination, the
+champion wrapper also emits its existing stage-voting, action-compression and
+prediction-count diagnostics into the service log. These logs support failure
+analysis on development cases; they do not expose scoring state to the policy
+or establish that a particular failure hypothesis is correct. The diagnostic
+binding is rejected for validation and report-only test cases.
+
+A reviewed champion control program can call
+`primitive(observation, execution_mode="uncompressed")` to execute 20 consecutive
+learned targets over 20 native control steps instead of compressing 26 targets
+into 20 steps. The next four targets seed inpainting. Calling
+`primitive(observation)` preserves the published timing. A mode is fixed on the
+first primitive call of each episode and cannot change until reset. Both routes
+use the same checkpoint, model inference, stage voting and correction rules;
+other backends reject this optional port unless they implement it. The control
+source and shared engine remain frozen in each candidate's closure. This is an
+execution ablation requiring independent review and paired native evidence,
+not a trained checkpoint or an established improvement.
+
+The completed champion comparison on radio validation instances 206 and 207
+gave both the published parent and a post-grasp arm-damping candidate native
+Q-scores of `[1, 0]`, for a mean of 0.5 each. The core selector retained the
+parent: the candidate did not meet the preregistered minimum gain of 0.05.
+These are two paired radio resets, not a full100 result or a reproduction of
+the published 2025 score. The subsequent uncompressed-timing candidate has
+separate frozen provenance and a new paired cohort; its preparation and
+admission do not constitute performance evidence.
+
+This verifies artifacts and creates a core harness manifest. Actual-weight
+inference, independent admission and full-budget native evaluation remain
+separate prerequisites. The first transfer is single-task and single-environment;
+it does not establish full100 coverage. System 2 must compare each admitted
+candidate with this new frozen parent on the same instances and episode budgets.
+
 The target is a higher mean native benchmark score than the declared baselines
 under comparable evaluation conditions, achieved through RSI iterations without
 benchmark hacks. Installing the environment, completing a few tasks, or passing
@@ -408,9 +483,31 @@ loop's protocol to `{"identity": evaluator.revision, "evaluation_kind":
 The proposer can delegate development to `evaluator.development(parent, output)`.
 Software fixtures exercise the actual core iteration through immutable lineage
 inheritance, recovery without repeated effects, atomic quota rejection, and
-tampered admission evidence. The current OpenPI backend is task-bound: a larger
-task scope is rejected before trial reservation, never reduced automatically.
-This adapter does not establish full-task checkpoint coverage or native RSI gains.
+tampered admission evidence. Legacy OpenPI seeds remain bound to one task.
+A shared multitask checkpoint declares an explicit task-to-prompt mapping and
+normalization asset. A comparison containing any undeclared task is rejected
+before trial reservation; the task scope is never reduced automatically.
+Declared task coverage is not evidence of checkpoint competence or native RSI gains.
+
+To materialize a shared checkpoint after training and normalization are complete:
+
+```bash
+python -m PhysicalRSI_baselines.behavior_baseline.seed /tmp/behavior-full100-seed \
+  --source /path/to/pinned/openpi \
+  --checkpoint /path/to/completed/checkpoint \
+  --environment-manifest /path/to/policy-environment.txt \
+  --repo-id behavior-1k/2026-challenge-demos \
+  --asset-id behavior2026_full100_rgb \
+  --task-prompts /path/to/training-task-prompts.json
+```
+
+The JSON file maps each canonical task name to the exact prompt used in training.
+Its contents become part of the immutable backend identity; serving an undeclared
+task or omitting the explicit task for a multitask seed fails. The checkpoint must
+contain `assets/behavior2026_full100_rgb/norm_stats.json`. This command verifies
+and freezes artifacts only; it neither trains the model nor qualifies full100
+performance. The service supervisor passes its frozen native case's task via
+`--task`, and each service rejects resets for a different task.
 
 `admission.ReviewedAdmission` consumes explicit code-review records named by the
 candidate revision. It requires review decisions for onboard inputs, native
@@ -506,30 +603,33 @@ verification and local SHA256 records. The official CPU weight loader restored
 against `pi05_b1k`, and checked all values are finite
 (`runtime/pi05-base-restore-probe-001.json`). This is a base checkpoint, not a
 trained full-task BEHAVIOR policy. A CPU shape trace gives about 50 GiB for its
-full training state including Adam and EMA; activation and runtime costs remain
-unmeasured at runtime. The batch64 GPU compiler probe completed: its buffer
+full training state including Adam and EMA; activation and runtime costs were
+not measured by that CPU trace. The batch64 GPU compiler probe completed: its buffer
 estimate is 81.35 GiB, exceeding the device's 71.69 GiB physical capacity before
 runtime overhead. This exact single-device compiled step cannot fit. The batch32
 compiler probe completed with only about 1.47 GiB remaining before runtime
 overhead; it does not establish equivalent global-batch64 gradient accumulation.
 
-A user-authorized agent DSW now provides two RTX PRO 5000 72GB GPUs. The pinned
-official global-batch64 step compiled with FSDP across both devices, estimating
-46,572,890,256 buffer bytes per device. Actual base-weight Adam/EMA initialization
-succeeded, but the first optimizer probe failed when the BFC allocator requested
-an 18.32 GiB temporary buffer. A `platform` allocator diagnostic allocated the
-buffers but failed during execution with a CUDA illegal-address error. Small-array
-arithmetic, all-reduce and all-gather checks passed on both GPUs with both
-allocators. A preallocated BFC diagnostic remains in progress. Compiler feasibility
-is not runtime success. These probes use synthetic data and never publish a
-trained checkpoint.
+The two-device training probes subsequently isolated a Blackwell collective
+failure to the original NCCL runtime. Loading the separately pinned NCCL 2.31.2
+library allowed global-batch64 FSDP training with preallocated BFC memory: 50
+synthetic Adam/EMA steps and one real training-episode batch step completed
+(`runtime/training-gpu-runtime-batch64-fsdp2-010.json` and `-011.json`). The real
+batch used sample-only normalization. These probes retained no trained model and
+provide no benchmark score. The borrowed training DSW was stopped after the
+probes; its historical allocation does not authorize new provisioning.
 
-The full100 training-table download is separately pinned to the official dataset
-revision: 955 files, 74,558,696,633 bytes, two workers, publisher SHA256 checks and
-a 300 GiB shared-storage free-space floor. RGB video download, full-cohort
-normalization and real demonstration training remain outstanding. Full training
-must also budget Arrow caches and checkpoint retention beyond the published
-payload size.
+The full100 training tables are complete: 955 publisher-verified files,
+74,558,696,633 bytes, pinned to dataset revision
+`4f50b44796641a4d526a19d9aeadc8aa51e2f2c2`
+(`runtime/full100-tables-download-001/receipt.json`). Full-cohort normalization
+also completed over 100 tasks and 20,000 training episodes: 210,916,736 frames
+contributed, with 38 final frames dropped by the official batch64 normalization
+rule. The 23-dimensional state/action statistics are finite; their SHA256 is
+`1735a2e5687f1b8c44ca955405e388084bcdc31a1649673b4dd293de78071dda`
+(`runtime/full100-normalization-completion-verification-001.json`). RGB download
+and full demonstration training remain incomplete. Training additionally requires
+space for Arrow caches and checkpoint replacement beyond the downloaded payload.
 
 `training_tables.py` joins training rows across file boundaries and constructs
 episode-clipped action horizons without decoding images. It checks global row
@@ -538,9 +638,9 @@ consumption. Global normalization batches may span episodes and preserve the
 official sequential batch/drop-tail behavior. Six software tests cover boundaries,
 input preservation and malformed cohorts. A real 1,956-frame episode traversed
 this implementation; seven sampled frames, including terminal padding boundaries,
-matched the official RGB reader's state/action transforms exactly. This does not
-establish full-cohort statistics. Runtime normalization preparation requires all
-955 publisher-verified training tables before statistics can be published.
+matched the official RGB reader's state/action transforms exactly. That small
+probe alone did not establish full-cohort statistics; the completed full-cohort
+receipt above supplies the separate coverage and integrity evidence.
 
 The pinned normalization CLI accepts `--config-name` and `--max-frames`; it does
 not accept the dataset override flags shown in the pinned baseline documentation.
@@ -549,10 +649,45 @@ OpenPI configuration for the full RGB dataset, a separate full-task normalizatio
 asset ID and the verified local base checkpoint. CPU configuration construction
 passed (`runtime/full100-config-probe-001.json`). This is configuration evidence
 only: the builder does not download missing data or launch normalization/training.
-Both future workloads must consume the same configuration. Batch size, step
-count, workers and checkpoint retention in the probe are preview values, not a
-launched or frozen training experiment.
+Normalization and training share that configuration. The later frozen recipe
+(`runtime/full100-training-recipe-003/`) specifies 50,000 optimizer steps,
+global batch64, two FSDP devices, eight data workers, seed42 and checkpoint saves
+every 10,000 steps. It selects the terminal checkpoint, with no validation-based
+checkpoint search. This prepares a local reference using official code; it does
+not reproduce a verified published full100 checkpoint or score. The guarded
+training entry requires complete data, the pinned environment, sufficient storage
+and eligible idle compute before dispatch. Full100 training has not started.
 
 Official references: [installation](https://behavior.stanford.edu/getting_started/installation.html),
 [baselines](https://behavior.stanford.edu/challenge/baselines.html),
 [upstream source](https://github.com/StanfordVL/BEHAVIOR-1K).
+
+### Grouped native evaluation
+
+`NativeEvaluator(..., native_group_size=2)` explicitly opts into shared native
+launches for validation. The default is one instance per launch; development
+always remains single-instance so its diagnostic stream stays attributable.
+`GroupedNativeTrials` also supports preregistered public-test requests. Each
+launch uses the pinned upstream evaluator with `--instance-indices` and
+`--num-envs`; task budgets and native final Q-score are unchanged, and shortened
+trials are rejected. This option changes the evaluator identity and requires a
+new frozen experiment workspace.
+
+Quota is reserved for every logical episode before execution. Compatible cases
+are sorted by instance index and grouped within one candidate and task. Parent
+and candidate must use identical case groups: the core comparison checks the
+actual native command after normalizing endpoint and output paths. Different
+grouping cannot enter the same paired comparison.
+
+A completed group publishes individually attributable case receipts, each bound
+to the shared command, complete member manifest and native result. Missing or
+interrupted groups block further dispatch rather than silently retrying episodes.
+Missing derived case views can be reconstructed from a verified completed group
+without running the simulator again. Immutable evidence uses hard links where
+available and is rehashed on inspection. Preserve the whole experiment directory.
+
+The grouped transport has software coverage for quota accounting, interrupted
+execution, evidence corruption, recovery and core comparison compatibility.
+These tests use a fake native process; they do not establish simulator throughput,
+full100 qualification or improved policy scores. Earlier single-instance results
+retain their original execution identity and are never relabeled as grouped runs.

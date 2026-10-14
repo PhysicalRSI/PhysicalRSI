@@ -1,5 +1,6 @@
 """Serve a frozen reviewed program using the official BEHAVIOR websocket protocol."""
 import argparse
+import logging
 import os
 from pathlib import Path
 from time import monotonic
@@ -9,7 +10,7 @@ import numpy as np
 from PhysicalRSI_core.contracts import Context
 from PhysicalRSI_core.infra.storage import digest, file_digest, read_json
 from PhysicalRSI_core.self_harness.artifacts import verify_harness
-from .openpi_backend import OpenPIBackend
+from .openpi_backend import OpenPIBackend, select_task
 from .program import ProgramPolicy
 from .engine import verify as verify_engine
 from .diagnostics import DevelopmentTrace, validate_binding
@@ -55,6 +56,7 @@ class ServingPolicy:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("candidate", type=Path, help="Core harness manifest JSON")
+    parser.add_argument("--task", help="Explicit task for a frozen multitask checkpoint")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--episode-seconds", type=float, default=3600)
@@ -67,18 +69,28 @@ def main():
     specification = read_json(Path(candidate["root"]) / "backend.json")
     if (args.development_binding is None) != (args.development_trace is None):
         raise ValueError("Supply both the development binding and trace destination")
+    task = select_task(specification, args.task)
     case_id = None
     if args.development_binding is not None:
         case_id = validate_binding(read_json(args.development_binding),
-                                   candidate_sha256=verify_harness(candidate), task=specification["task"])
-    backend = OpenPIBackend(specification)
+                                   candidate_sha256=verify_harness(candidate), task=task)
+    if specification.get("kind") == "champion-pi05-b1k/v1":
+        from .champion_backend import ChampionBackend, transport_class
+        if case_id is not None:
+            # The binding above admits development cases only. Upstream logs
+            # explain stage voting and compression without changing actions.
+            logging.getLogger("b1k.shared.eval_b1k_wrapper").setLevel(logging.INFO)
+        backend = ChampionBackend(specification, task=task)
+        WebsocketPolicyServer = transport_class(specification)
+    else:
+        backend = OpenPIBackend(specification, task=task)
+        from openpi.serving.websocket_b1k_server import WebsocketPolicyServer
     recorder = (DevelopmentTrace(args.development_trace, split="development",
                                  candidate_sha256=verify_harness(candidate),
-                                 task=specification["task"], case_id=case_id)
+                                 task=task, case_id=case_id)
                 if case_id is not None else None)
     program = ProgramPolicy(candidate, backend, diagnostics=recorder)
-    policy = ServingPolicy(program, task=specification["task"], episode_seconds=args.episode_seconds)
-    from openpi.serving.websocket_b1k_server import WebsocketPolicyServer
+    policy = ServingPolicy(program, task=task, episode_seconds=args.episode_seconds)
     WebsocketPolicyServer(policy, host=args.host, port=args.port, metadata=policy.metadata()).serve_forever()
 
 

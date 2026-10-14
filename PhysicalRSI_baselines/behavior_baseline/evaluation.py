@@ -3,7 +3,7 @@
 Admission is an explicit reviewed producer port, not inferred from hashes or
 software tests. Its check(candidate, directory) must return accepted, reason
 (on rejection), and relative evidence-file hashes, without simulator effects.
-The current batch backend requires a task-bound OpenPI checkpoint; unsupported
+The batch backend requires explicit OpenPI checkpoint task coverage; unsupported
 coverage fails before execution rather than silently reducing the task scope.
 """
 from copy import deepcopy
@@ -18,13 +18,14 @@ from PhysicalRSI_core.self_harness.bindings import validate_admission
 from PhysicalRSI_core.self_harness.evaluation import freeze_json
 from PhysicalRSI_core.self_harness.protocol import CaseProtocol
 from PhysicalRSI_core.self_harness.selection import comparison_identity
-from . import batch, bridge, feedback, native, service, trials
+from . import batch, bridge, feedback, grouped, native, service, trials
+from .openpi_backend import supported_tasks
 
 
 class NativeEvaluator:
     def __init__(self, runtime, *, protocol, admission, quota, python, system2,
                  scope, port=8000, seconds=3600, startup_seconds=1800,
-                 temporary_directory=None):
+                 temporary_directory=None, native_group_size=1):
         if not isinstance(protocol, CaseProtocol) or not isinstance(system2, Revision) or not scope:
             raise ValueError('Declare a case protocol, System 2 identity and scope')
         self.runtime = Path(runtime).resolve()
@@ -33,6 +34,9 @@ class NativeEvaluator:
         self.system2, self.scope = system2, scope
         self.options = dict(port=port, seconds=seconds, temporary_directory=temporary_directory)
         self.startup_seconds = startup_seconds
+        if type(native_group_size) is not int or native_group_size < 1:
+            raise ValueError('Declare a positive integer native group size')
+        self.native_group_size = native_group_size
         self._identity = deepcopy(self.identity())
         self.revision = digest(self._identity)
 
@@ -41,8 +45,9 @@ class NativeEvaluator:
             protocol=self.protocol.identity(), admission=self.admission.identity(),
             quota=self.quota.identity(), python=str(self.python), system2=asdict(self.system2),
             scope=self.scope, options=self.options, startup_seconds=self.startup_seconds,
+            native_group_size=self.native_group_size,
             implementations={p.name: file_digest(p) for p in [Path(__file__),
-                *[Path(m.__file__) for m in (batch, bridge, feedback, native, service, trials)]]})
+                *[Path(m.__file__) for m in (batch, bridge, feedback, grouped, native, service, trials)]]})
 
     def policy_identity(self):
         value = self.identity()
@@ -121,7 +126,7 @@ class NativeEvaluator:
             if not receipt['accepted']:
                 raise ValueError('Candidate did not pass independent admission')
             backend = read_json(Path(candidate['root']) / 'backend.json')
-            if backend.get('kind') != 'openpi-b1k/v1' or set(cases) != {backend.get('task')}:
+            if not set(cases) <= supported_tasks(backend):
                 raise ValueError('Checkpoint backend does not cover the entire declared task set')
             origin = System2Trial(self.system2, name, revision, split,
                                   digest(comparison) if comparison else None,
@@ -129,6 +134,9 @@ class NativeEvaluator:
             for task, values in sorted(cases.items()):
                 requests.extend(dict(task=task, mode='train', instance_index=c['instance_index'],
                                      system2=origin, **self.options) for c in values)
+        if self.native_group_size > 1 and split != 'development':
+            return grouped.GroupedNativeTrials(self.runtime, output / 'native-trials' / split,
+                quota=self.quota, trials=requests, group_size=self.native_group_size)
         return trials.NativeTrials(self.runtime, output / 'native-trials' / split,
                                    quota=self.quota, trials=requests)
 

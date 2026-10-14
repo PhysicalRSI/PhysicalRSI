@@ -25,7 +25,7 @@ class Backend:
         return np.zeros((1, 23), dtype=np.float32)
 
 
-def make_policy(tmp_path, control_source=None):
+def make_policy(tmp_path, control_source=None, backend=None):
     # Complete synthetic closure exercises core binding, not benchmark admission.
     atomic_json(tmp_path / "test-dependencies.json", {"scope": "unit test only"})
     control = tmp_path / "control.py"
@@ -33,11 +33,42 @@ def make_policy(tmp_path, control_source=None):
     candidate = dict(id="test-policy", root=str(tmp_path), components={
         kind: {"test-dependencies.json": file_digest(tmp_path / "test-dependencies.json")} for kind in CLOSURE})
     candidate["components"]["control"] = {"control.py": file_digest(control)}
-    atomic_json(tmp_path / "backend.json", Backend().identity())
+    backend = Backend() if backend is None else backend
+    atomic_json(tmp_path / "backend.json", backend.identity())
     candidate["components"]["foundation"] = {"backend.json": file_digest(tmp_path / "backend.json")}
     atomic_json(tmp_path / "engine.json", engine_manifest())
     candidate["components"]["dependencies"]["engine.json"] = file_digest(tmp_path / "engine.json")
-    return ProgramPolicy(candidate, Backend())
+    return ProgramPolicy(candidate, backend)
+
+
+def test_execution_mode_port_preserves_public_observation_boundary(tmp_path):
+    class ExecutionBackend(Backend):
+        def act_with_execution(self, observation, context, *, execution_mode):
+            assert execution_mode == "uncompressed"
+            return self.act(observation, context) + 0.125
+
+    source = ('def initialize(task):\n    return {}\n'
+              'def step(obs, state, primitive):\n'
+              '    return primitive(obs, execution_mode="uncompressed")\n')
+    policy = make_policy(tmp_path, source, ExecutionBackend())
+    raw = {"robot::proprio": np.zeros(256), "privileged": "must not reach backend"}
+    raw.update({prefix + "::rgb": np.zeros((8,8,3), dtype=np.uint8) for prefix in CAMERAS.values()})
+    context = Context("execution-mode-fixture", harness_revision=policy.revision)
+    policy.begin_episode("radio", {}, raw, context)
+    np.testing.assert_array_equal(policy.act(raw, context), np.full((1,23), .125))
+
+
+def test_execution_mode_rejects_backend_without_capability(tmp_path):
+    source = ('def initialize(task):\n    return {}\n'
+              'def step(obs, state, primitive):\n'
+              '    return primitive(obs, execution_mode="uncompressed")\n')
+    policy = make_policy(tmp_path, source)
+    raw = {"robot::proprio": np.zeros(256)}
+    raw.update({prefix + "::rgb": np.zeros((8,8,3), dtype=np.uint8) for prefix in CAMERAS.values()})
+    context = Context("unsupported-mode", harness_revision=policy.revision)
+    policy.begin_episode("radio", {}, raw, context)
+    with pytest.raises(ValueError, match="does not expose"):
+        policy.act(raw, context)
 
 
 def test_development_trace_preserves_actions_and_pre_control_observation(tmp_path):

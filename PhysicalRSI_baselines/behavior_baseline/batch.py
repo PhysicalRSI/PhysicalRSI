@@ -9,6 +9,7 @@ from PhysicalRSI_core.infra.storage import atomic_json, digest, file_digest, loc
 from PhysicalRSI_core.self_harness.artifacts import verify_harness
 from . import native, service
 from .trials import NativeTrials
+from .openpi_backend import supported_tasks
 
 
 def execute(trials, *, candidates, python, startup_seconds=1800, episode_seconds=3600):
@@ -41,7 +42,7 @@ def execute(trials, *, candidates, python, startup_seconds=1800, episode_seconds
             raise ValueError("Local service orchestration requires a loopback endpoint")
         candidate = read_json(bound[name]['path'])
         backend = read_json(Path(candidate['root']) / 'backend.json')
-        if backend.get('task') != task or backend.get('kind') != 'openpi-b1k/v1':
+        if task not in supported_tasks(backend):
             raise ValueError("Candidate backend does not cover the planned task")
         groups.setdefault((name, task, port), []).append(index)
     identity = dict(plan_sha256=digest(trials.plan), candidates=bound,

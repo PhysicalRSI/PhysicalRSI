@@ -8,9 +8,9 @@ import shutil
 import subprocess
 import tempfile
 
-from PhysicalRSI_core.infra.storage import atomic_json, file_digest, identifier, locked, relative_path
+from PhysicalRSI_core.infra.storage import atomic_json, file_digest, identifier, locked, relative_path, read_json
 from PhysicalRSI_core.self_harness.artifacts import CLOSURE, verify_harness
-from .openpi_backend import OPENPI_REVISION, TOKENIZER
+from .openpi_backend import OPENPI_REVISION, TOKENIZER, supported_tasks
 from .engine import manifest as engine_manifest
 
 CONTROL = '''def initialize(task):
@@ -39,11 +39,21 @@ def checkpoint_inventory(root):
     return result
 
 
-def materialize(output, *, source, checkpoint, task, environment_manifest,
-                training_config="pi05_b1k", repo_id=None, action_horizon=16):
+def materialize(output, *, source, checkpoint, task=None, environment_manifest,
+                training_config="pi05_b1k", repo_id=None, action_horizon=16, task_prompts=None, asset_id=None):
     output = Path(output).absolute()
     identifier(output.name)
-    identifier(task)
+    if task_prompts is None:
+        identifier(task)
+        if asset_id is not None:
+            raise ValueError("Use legacy repo_id for single-task normalization")
+    else:
+        if task is not None or not isinstance(task_prompts, dict) or not task_prompts:
+            raise ValueError("Declare either one task or a task-prompt mapping")
+        for name in task_prompts:
+            identifier(name)
+        if not repo_id or not asset_id:
+            raise ValueError("Multitask seeds require dataset repo_id and normalization asset_id")
     if isinstance(action_horizon, bool) or not isinstance(action_horizon, int) or action_horizon <= 0:
         raise ValueError("Action horizon must be a positive integer")
     source = Path(source).resolve()
@@ -55,7 +65,7 @@ def materialize(output, *, source, checkpoint, task, environment_manifest,
                    check=True, timeout=120)
     files = checkpoint_inventory(checkpoint)
     repo_id = repo_id or task
-    norm_stats = "assets/" + str(relative_path(repo_id)) + "/norm_stats.json"
+    norm_stats = "assets/" + str(relative_path(asset_id or repo_id)) + "/norm_stats.json"
     if norm_stats not in files:
         raise ValueError("Checkpoint lacks normalization statistics for the declared repo_id")
     backend = dict(kind="openpi-b1k/v1", source_root=str(source), source_revision=revision,
@@ -64,6 +74,10 @@ def materialize(output, *, source, checkpoint, task, environment_manifest,
                    checkpoint_root=str(Path(checkpoint).resolve()), checkpoint_files=files,
                    task=task, training_config=training_config, repo_id=repo_id,
                    control_mode="receding_horizon", action_horizon=action_horizon)
+    if task_prompts is not None:
+        backend.pop("task")
+        backend.update(kind="openpi-b1k-multitask/v1", task_prompts=dict(task_prompts), asset_id=asset_id)
+    supported_tasks(backend)
     output.parent.mkdir(parents=True, exist_ok=True)
     with locked(output.parent / f".{output.name}.lock"):
         if output.exists() or output.is_symlink():
@@ -77,8 +91,9 @@ def materialize(output, *, source, checkpoint, task, environment_manifest,
             shutil.copyfile(source / "uv.lock", stage / "uv.lock")
             atomic_json(stage / "seed-policy.json", {
                 "schema": "physicalrsi.behavior-seed/v1", "task": task,
+                "declared_tasks": sorted(supported_tasks(backend)),
                 "skill_selection": "Always call the fixed official action backend",
-                "skills": [], "tools": [], "prompts": "Official task registry prompt",
+                "skills": [], "tools": [], "prompts": ("Frozen training prompt mapping" if task_prompts is not None else "Official task registry prompt"),
                 "memory_rules": "No cross-episode mutable memory; no rollout-time code generation",
                 "qualification": None, "admission": "pending independent review and native validation"})
             components = {kind: {"seed-policy.json": file_digest(stage / "seed-policy.json")}
@@ -108,13 +123,18 @@ def main():
     parser.add_argument("output", type=Path)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--task", required=True)
+    tasks = parser.add_mutually_exclusive_group(required=True)
+    tasks.add_argument("--task")
+    tasks.add_argument("--task-prompts", type=Path, help="JSON task-to-training-prompt mapping")
+    parser.add_argument("--asset-id", help="Shared multitask normalization asset name")
     parser.add_argument("--environment-manifest", type=Path, required=True,
                         help="Installed policy environment's pip freeze or uv pip freeze output")
     parser.add_argument("--training-config", default="pi05_b1k")
     parser.add_argument("--repo-id")
     parser.add_argument("--action-horizon", type=int, default=16)
     args = vars(parser.parse_args())
+    if args["task_prompts"] is not None:
+        args["task_prompts"] = read_json(args["task_prompts"])
     materialize(**args)
     print(args["output"] / "candidate.json")
 

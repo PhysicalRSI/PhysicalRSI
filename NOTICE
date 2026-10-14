@@ -1,5 +1,16 @@
 PhysicalRSI
 
+The BEHAVIOR champion policy factory is adapted from
+IliaLarchenko/behavior-1k-solution, revision
+ca556f74a455cef7987a2be4537b5ac85cc56dd7,
+src/b1k/policies/policy_config.py (Apache-2.0).
+champion_policy_config.py changes its parameter-restoration import and call
+to use bounded local loading. Its model construction and transforms are retained.
+champion_restore_params.py also adapts parameter-tree restoration from
+wensi-ai/openpi, revision 01177e0242a1c7e8fad2547caa0e987def614cda,
+src/openpi/models/model.py (Apache-2.0).
+These source adaptations do not include external model weights or datasets.
+
 This worktree is based on RLinf/RPent, revision
 72686b8c7606853afce7786bee4a3d95498a1c0d. The root Apache-2.0 LICENSE
 and retained source notices continue to apply to upstream material.

@@ -7,7 +7,9 @@ from PhysicalRSI_core.infra.storage import file_digest, read_json
 def manifest():
     root = Path(__file__).resolve().parents[2]
     files = ["PhysicalRSI_baselines/behavior_baseline/" + name for name in
-             ("engine.py", "program.py", "observations.py", "openpi_backend.py", "serve.py", "diagnostics.py")]
+             ("engine.py", "program.py", "observations.py", "openpi_backend.py", "serve.py", "diagnostics.py",
+              "champion_backend.py", "champion_observation.py", "champion_chunk_restore.py",
+              "champion_restore_params.py", "champion_policy_config.py")]
     files += ["PhysicalRSI_core/" + name for name in
               ("contracts.py", "embodiment.py", "infra/storage.py", "self_harness/artifacts.py")]
     return dict(schema="physicalrsi.behavior-system1-engine/v1",

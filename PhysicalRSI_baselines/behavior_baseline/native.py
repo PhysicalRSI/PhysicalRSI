@@ -128,6 +128,12 @@ def read_receipt(folder):
     native = read_json(folder / native_file)
     if receipt["native_result"] != native or receipt["outcome"] != ("success" if native["success"] else "failure"):
         raise ValueError("Native result differs from receipt")
+    specification = read_json(folder / "specification.json")
+    if specification.get("schema") == "physicalrsi.behavior-native-group-case/v1":
+        from .grouped import verify_case_binding
+        if receipt.get("schema") != "physicalrsi.behavior-native-group-case-receipt/v1":
+            raise ValueError("Grouped case receipt schema differs from its specification")
+        verify_case_binding(folder, receipt, specification)
     return receipt
 
 
