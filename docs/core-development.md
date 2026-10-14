@@ -2340,3 +2340,47 @@ campaigns with repeated screening, archival feedback and final reporting.
 The source audit and test log are retained under
 `/cpfs02/user/yanming/physicalrsi-core-checks/core-repetitions-001`.
 This validates the execution contract, not a native benchmark improvement.
+
+
+### Two-scenario matched native pilot 005
+
+`native-matched-bench-005` completed 56 native Trials and 88,256 physics
+steps on 2026-10-14, with no replacements. It used frozen source
+`c4acb0ac7b0ee5c994283c558a1ec9a2e8422855`; the later repeated-evaluation
+implementation was not part of this experiment. One sampler seed
+(20261024), two search rounds and population two were preregistered.
+Development and validation included standard and tall-obstacle cases;
+the final held-out panel contained two cases per scenario.
+
+| Arm | Final successes | Development / validation / test Trials | Trial elapsed seconds |
+| --- | --- | --- | --- |
+| Adaptive mean | 4/4 | 12 / 4 / 4 | 3841.76 |
+| Adaptive lower tail | 0/4 | 12 / 0 / 4 | 3065.74 |
+| Uniform search | 1/4 | 12 / 0 / 4 | 3030.98 |
+| Fixed initial | 0/4 | 0 / 0 / 4 | 808.83 |
+
+Search arms had the same maximum allowance of 28 Trials, but actual spending
+was unequal: rejected screening candidates skipped validation. The mean arm
+retained first-round global proposal `(0.480, 0.374)`; its second-round fitted
+proposal was rejected. The other search arms retained the initial policy.
+All three arms received exactly matched first-round proposals. Consequently,
+the descriptive mean-arm gain of 75 percentage points over uniform does not
+establish an advantage from recursive fitting.
+
+Execution variation materially affects selection. The selected mean policy's
+repeated tall-obstacle development case passed once in four observations,
+while its two fresh tall-obstacle test cases both passed. Uniform and fixed
+initial used the same final policy but scored 1/4 and 0/4 respectively.
+These observations, one sampler seed, four final cases and sequential arm
+execution do not establish statistical superiority or cross-task capability.
+The obstacle check measures final displacement; a successful development
+trajectory temporarily exceeded its displacement threshold. Passing this
+benchmark therefore does not establish collision-free execution throughout
+an episode.
+
+Frozen inputs, canonical receipts, the final 56-Trial `measurement-audit.json`,
+`result.json` and `comparison.json` are retained under
+`/cpfs02/user/yanming/physicalrsi-core-checks/native-matched-bench-005`.
+Independent recomputation checks task measurements against the declared
+layouts. Development repeatability and trajectory diagnostics are retained
+alongside the results; they are not additional held-out benchmark scores.
