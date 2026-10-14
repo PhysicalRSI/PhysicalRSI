@@ -2384,3 +2384,35 @@ Frozen inputs, canonical receipts, the final 56-Trial `measurement-audit.json`,
 Independent recomputation checks task measurements against the declared
 layouts. Development repeatability and trajectory diagnostics are retained
 alongside the results; they are not additional held-out benchmark scores.
+
+### Preregistered screening threshold for native search
+
+`auto_engineering.empirical.setup(..., screening_minimum_success_rate=0.5)`
+can admit partially successful development candidates to independent paired
+validation. The default remains 1.0. The finite rate must lie in [0, 1], is
+validated before workspace creation and is frozen into the existing evaluator
+identity. Changing it cannot resume an already frozen campaign.
+
+This option exposes the core multi-fidelity policy already supported by
+`MultiFidelityEvaluator`. It does not change the full-validation success gate,
+final-test verdict, task geometry or success checks. Repeated screening counts
+all executions. A partially successful validation candidate still cannot
+replace the incumbent under this example's full-success promotion policy.
+
+The development-only retrospective audit of pilot 005 found twelve measured
+candidate evaluations: one passed both cases, nine passed one case, and two
+passed neither. The nine partial results were screened out before independent
+validation. This motivates testing less restrictive screening in a new frozen
+experiment; it does not predict those candidates' validation outcomes or prove
+a benchmark gain. The original pilot and running repetition diagnostic retain
+their original source and protocols. Evidence is in
+`native-matched-bench-005/screening-gate-diagnostic.json` under the checks root.
+
+The affected native-adapter, repeated-evaluation and multi-fidelity suites
+passed 98 tests in 124.84 seconds. Coverage includes partial screening with
+two repetitions, unchanged full-validation rejection and final reporting,
+resume without new Trials, frozen-policy mismatch, and invalid rates rejected
+before workspace creation. These are software contract tests. Logs and source
+hashes are retained under `physicalrsi-core-checks/core-screening-threshold-001`.
+An earlier run was invalidated after a test source was edited during execution;
+its log is retained separately and is not validation evidence.

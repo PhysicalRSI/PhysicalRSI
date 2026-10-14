@@ -70,9 +70,12 @@ def _panels(value):
 def setup(workspace, python, *, panels, strategy, seed, population=2,
           device_registry=None, resource='isaac-gpu-0', gui=False,
           max_replacements=0, extra_trials=0, shared_cache=False, elite_weighting="uniform",
-          lower_tail_fraction=1., repetitions=1):
+          lower_tail_fraction=1., repetitions=1, screening_minimum_success_rate=1.):
     panels = _panels(panels)
     repetitions = repetition_count(repetitions)
+    screening_minimum_success_rate = finite(screening_minimum_success_rate)
+    if not 0 <= screening_minimum_success_rate <= 1:
+        raise ValueError('Declare a screening success rate in [0, 1]')
     if elite_weighting not in ("uniform", "fractional"):
         raise ValueError("Declare uniform or fractional elite weighting")
     if not 0 < finite(lower_tail_fraction) <= 1:
@@ -121,7 +124,8 @@ def setup(workspace, python, *, panels, strategy, seed, population=2,
             max_replacements=max_replacements, repetitions=repetitions)
         evaluator = r.MultiFidelityEvaluator(suite=declared, budgets={r.TASK:r.Budget(1,1200)}, scope=r.SCOPE,
             system2=r.Revision('isaac-empirical-validation','1'), quota=quota, device_registry=registry,
-            max_replacements=max_replacements, screening=screening, screening_resources={'native_worker':1}, minimum_success_rate=1.,
+            max_replacements=max_replacements, screening=screening, screening_resources={'native_worker':1},
+            minimum_success_rate=screening_minimum_success_rate,
             screen_incumbent=False, scheduler=scheduler, resources={'native_worker':1}, workers=1, wait_seconds=7200,
             repetitions=repetitions)
         return r.SelfHarness(directory, state=state, proposer=r.RolloutProposer(evaluator,evolver,archive=archive),

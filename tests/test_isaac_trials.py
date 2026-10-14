@@ -520,3 +520,50 @@ def test_native_signal_exit_retains_exit_code_without_python_error(tmp_path):
     worker.process = SimpleNamespace(poll=lambda: -11)
     with pytest.raises(RuntimeError, match='exited with code -11'):
         worker._wait(SimpleNamespace(check=lambda: None), path=worker.ipc / 'ready.json')
+
+
+@pytest.mark.parametrize('threshold,validated', [(1., False), (.5, True)])
+def test_empirical_partial_screening_keeps_full_validation_gate(tmp_path, monkeypatch, threshold, validated):
+    from PhysicalRSI_demos.auto_engineering import empirical
+
+    class PartialWorker(EmpiricalContractWorker):
+        def execute(self, action, context):
+            if self.case['seed'] % 2:
+                self.success_height = 1.
+                return ContractWorker.execute(self, action, context)
+            return super().execute(action, context)
+
+    monkeypatch.setattr(trials, 'NativeWorker', PartialWorker)
+    PartialWorker.resets = []
+    options = dict(panels=dict(development=[100, 101], validation=[[200, 201]], test=[300, 301]),
+                   strategy='adaptive', seed=1, repetitions=2,
+                   screening_minimum_success_rate=threshold)
+    result = empirical.run(tmp_path, sys.executable, **options)
+    root = tmp_path / 'campaign/rounds/round-0001/execution'
+    screening = read_json(root / 'screening.json')['output']
+    children = [v for v in screening['candidates'].values() if v['measured']]
+    assert len(children) == 2
+    assert all(v['per_task'][TASK] == .5 and v['accepted'] == validated for v in children)
+    assert screening['policy']['minimum_success_rate'] == threshold
+    assert any(200 <= row['case']['seed'] < 300 for row in PartialWorker.resets) == validated
+    # Partial screening gives access to fresh validation, never promotion or test credit.
+    assert result['current']['harness']['id'] == 'initial'
+    assert result['final_test']['metrics'][TASK]['success_rate'] == 0
+    assert result['final_test']['metrics'][TASK]['planned'] == 4
+    before = len(PartialWorker.resets)
+    assert empirical.run(tmp_path, sys.executable, **options) == result
+    assert len(PartialWorker.resets) == before
+    with pytest.raises(ValueError):
+        empirical.run(tmp_path, sys.executable,
+                      **dict(options, screening_minimum_success_rate=.5 if threshold == 1. else 1.))
+    assert len(PartialWorker.resets) == before
+
+
+@pytest.mark.parametrize('threshold', [True, -.1, 1.1, float('nan'), float('inf'), '0.5', None])
+def test_empirical_screening_threshold_rejected_before_workspace_creation(tmp_path, threshold):
+    from PhysicalRSI_demos.auto_engineering import empirical
+    root = tmp_path / 'unused'
+    with pytest.raises(ValueError):
+        empirical.setup(root, sys.executable, panels=dict(development=[1], validation=[[2]], test=[3]),
+                        strategy='adaptive', seed=1, screening_minimum_success_rate=threshold)
+    assert not root.exists()
