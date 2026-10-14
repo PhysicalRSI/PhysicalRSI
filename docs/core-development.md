@@ -2416,3 +2416,36 @@ before workspace creation. These are software contract tests. Logs and source
 hashes are retained under `physicalrsi-core-checks/core-screening-threshold-001`.
 An earlier run was invalidated after a test source was edited during execution;
 its log is retained separately and is not validation evidence.
+
+### Native repeat integration diagnostic
+
+`native-repetitions-diagnostic-001` completed on 2026-10-14 with four successful
+native development Trials: two executions each of standard seed 2026102500
+and tall-obstacle seed 2026102501. It used frozen source
+`386e01542c512b0ef34092571a3dfbd19ce544cb`, fixed memory `(0.480, 0.374)`,
+sample height 0.12 meters, and no replacement allowance. All four distinct
+run IDs consumed the declared four-Trial quota; each verdict's seven checks
+were independently recomputed from native measurements and declared layouts.
+Reconstructing the evaluator and rereading development returned identical
+feedback without new native files, additional reservations or a changed
+candidate. The driver verified the device lease was released.
+
+This is a development-only integration diagnostic of repeated execution and
+recovery semantics, not an adaptive-search comparison or held-out score.
+The preregistration, source manifest, canonical receipts and final `result.json`
+are retained under
+`/cpfs02/user/yanming/physicalrsi-core-checks/native-repetitions-diagnostic-001`.
+
+The subsequent `native-matched-bench-006` was preregistered on source
+`0ee3cf45983a230f0816fda1d3d9ceb01c36516c`: sampler seeds 20261026 and 20261027,
+adaptive and uniform search with matched two-round, two-candidate budgets,
+a fixed initial baseline, two repetitions per case, and screening threshold
+0.5 for both search arms. Full-validation and final-test success checks are
+unchanged. Search order reverses between seeds, and all four searches finish
+before any final test. The maximum is 56 Trials per search arm per seed plus
+eight fixed-baseline test Trials per seed, or 240 total; actual spending is
+reported separately. Eight unique held-out cases across the two seeds yield
+16 executions per arm. This pilot cannot isolate the effects of repetition
+and screening relative to historical studies, or treat repeats as independent
+cases. Its prepared plans reserved zero Trials before launch; results remain
+pending until completed, hash-bound native evidence is available.
