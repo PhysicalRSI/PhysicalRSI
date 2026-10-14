@@ -226,13 +226,22 @@ class ResearchCampaign:
             history.append(record)
         return self._result(cursor, revision, history, "completed")
 
-    def report_test(self, initial):
+    def report_test(self, initial, *, require_completed=False):
         """Complete/audit the campaign, then evaluate its frozen final revision.
 
         The claim and report live outside immutable round evidence. Test feedback
         is never exposed to reflection or to a subsequent round in this campaign.
+        With require_completed, reject unfinished research before any provider
+        or Trial is dispatched; completed evidence still receives the full audit.
         """
+        if type(require_completed) is not bool:
+            raise ValueError("require_completed must be boolean")
         with locked(self.root / ".campaign.lock"):
+            if require_completed:
+                pointer = self.root / "current.json"
+                if (not pointer.exists()
+                        or self._read(read_json(pointer)["revision"])["index"] != self.max_rounds):
+                    raise ValueError("Final tests require an already completed research campaign")
             result = self._run(initial)
             if result["status"] != "completed":
                 raise ValueError("Final tests require a completed research campaign")

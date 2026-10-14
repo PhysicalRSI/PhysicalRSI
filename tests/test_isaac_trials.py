@@ -612,3 +612,29 @@ def test_empirical_cli_malformed_plan_has_no_workspace(tmp_path, plan):
         empirical.main(['--workspace', str(root), '--python', sys.executable, '--plan', str(source), '--prepare-only'])
     assert caught.value.code == 2
     assert not root.exists()
+
+
+def test_empirical_cli_search_and_final_test_can_be_separated(tmp_path, monkeypatch):
+    from PhysicalRSI_demos.auto_engineering import empirical
+    monkeypatch.setattr(trials, 'NativeWorker', EmpiricalContractWorker)
+    EmpiricalContractWorker.resets = []
+    plan = tmp_path / 'plan.json'
+    atomic_json(plan, dict(panels=dict(development=[100, 101], validation=[[200, 201]], test=[300, 301]),
+                          strategy='adaptive', seed=1))
+    root = tmp_path / 'workspace'
+    argv = ['--workspace', str(root), '--python', sys.executable, '--plan', str(plan)]
+    with pytest.raises(ValueError, match='already completed'):
+        empirical.main([*argv, '--test-only'])
+    assert EmpiricalContractWorker.resets == []
+    research = empirical.main([*argv, '--search-only'])
+    assert research['status'] == 'completed' and 'final_test' not in research
+    assert all(row['case']['seed'] < 300 for row in EmpiricalContractWorker.resets)
+    count = len(EmpiricalContractWorker.resets)
+    assert empirical.main([*argv, '--search-only']) == research
+    assert len(EmpiricalContractWorker.resets) == count
+    result = empirical.main([*argv, '--test-only'])
+    assert result['final_test']['selection_sha256'] == research['revision']
+    assert len(EmpiricalContractWorker.resets) == count + 2
+    assert all(row['case']['seed'] >= 300 for row in EmpiricalContractWorker.resets[count:])
+    assert empirical.main([*argv, '--test-only']) == result
+    assert len(EmpiricalContractWorker.resets) == count + 2

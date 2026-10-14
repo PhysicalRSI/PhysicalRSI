@@ -158,7 +158,10 @@ def main(argv=None):
     parser.add_argument('--workspace', required=True)
     parser.add_argument('--python', required=True, help='Isaac Sim 5.1 Python launcher')
     parser.add_argument('--plan', required=True, help='JSON object of setup options, including panels, strategy and seed')
-    parser.add_argument('--prepare-only', action='store_true', help='Freeze the plan and inspect quota without executing Trials')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--prepare-only', action='store_true', help='Freeze the plan and inspect quota without executing Trials')
+    mode.add_argument('--search-only', action='store_true', help='Run search without accessing final test cases')
+    mode.add_argument('--test-only', action='store_true', help='Evaluate an already completed search; never start or resume search')
     args = parser.parse_args(argv)
     try:
         options = json.loads(Path(args.plan).read_text())
@@ -181,9 +184,15 @@ def main(argv=None):
     if args.prepare_only:
         result = dict(state='prepared', execution_started=False,
                       initial_harness_sha256=r.verify_harness(initial), quota=quota.status(), qualification=None)
+    elif args.test_only:
+        final = campaign.report_test(initial, require_completed=True)
+        result = dict(state='tested', final_test=final, quota=quota.status(), qualification=None)
     else:
         research = campaign.run(initial)
-        result = dict(research, final_test=campaign.report_test(initial), quota=quota.status(), qualification=None)
+        if args.search_only:
+            result = dict(research, quota=quota.status(), qualification=None)
+        else:
+            result = dict(research, final_test=campaign.report_test(initial), quota=quota.status(), qualification=None)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return result
 

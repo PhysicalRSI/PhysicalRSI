@@ -238,6 +238,11 @@ validation; full-success promotion and the seven final task checks remain
 unchanged. Repeated executions count against the allowance and do not create
 additional independent cases. To share a GPU with other cooperating runs,
 include the same `device_registry` path and `resource` name in every plan.
-This command runs one search arm; multi-arm studies must freeze matching
-plans and defer all final tests until their searches are complete using the
-`setup` API and `ResearchCampaign.report_test` separately.
+This command runs one search arm. For a multi-arm study, freeze matching plans
+and use `--search-only` for every arm first. After all searches complete, use
+`--test-only` with each arm's unchanged plan and workspace. These modes are
+mutually exclusive with `--prepare-only`. `--test-only` rejects an unfinished
+search before dispatching a provider or Trial; it does not resume that search.
+The core equivalent is `ResearchCampaign.report_test(initial,
+require_completed=True)`. It still audits completed evidence before testing.
+The caller remains responsible for waiting for every arm before testing any arm.

@@ -236,3 +236,53 @@ def test_delta_preserves_counterexamples_and_restricts_refinement(tmp_path):
     operation["conditions"] = {}
     with pytest.raises(ValueError, match="broaden"):
         apply(operation, refined)
+
+
+def test_completed_only_report_rejects_fresh_and_partial_search_without_execution(tmp_path, monkeypatch):
+    campaign, initial, suite, quota = setup(tmp_path, max_rounds=2, max_trials=22)
+    with pytest.raises(ValueError, match='already completed'):
+        campaign.report_test(initial, require_completed=True)
+    assert suite.resets == [] and quota.status()['reserved_trials'] == 0
+    assert campaign.reflector.calls == 0
+    publish = campaign._publish
+
+    def interrupted(body):
+        revision = publish(body)
+        if body['index'] == 1:
+            raise RuntimeError('stop after first committed round')
+        return revision
+
+    monkeypatch.setattr(campaign, '_publish', interrupted)
+    with pytest.raises(RuntimeError, match='first committed round'):
+        campaign.run(initial)
+    assert len(suite.resets) == 10 and campaign.reflector.calls == 1
+    with pytest.raises(ValueError, match='already completed'):
+        campaign.report_test(initial, require_completed=True)
+    assert len(suite.resets) == quota.status()['reserved_trials'] == 10
+    assert campaign.reflector.calls == 1
+    monkeypatch.setattr(campaign, '_publish', publish)
+    result = campaign.run(initial)
+    assert len(suite.resets) == 20 and campaign.reflector.calls == 2
+    report = campaign.report_test(initial, require_completed=True)
+    assert report['selection_sha256'] == result['revision']
+    assert len(suite.resets) == quota.status()['reserved_trials'] == 22
+    assert campaign.report_test(initial, require_completed=True) == report
+    assert len(suite.resets) == 22 and campaign.reflector.calls == 2
+
+
+def test_completed_only_report_still_audits_completed_evidence(tmp_path):
+    campaign, initial, suite, quota = setup(tmp_path, max_rounds=1, max_trials=12)
+    campaign.run(initial)
+    path = campaign.root / 'rounds/round-0001/receipt.json'
+    path.write_text(path.read_text() + '\n')
+    with pytest.raises(ValueError, match='Completed research round changed'):
+        campaign.report_test(initial, require_completed=True)
+    assert len(suite.resets) == quota.status()['reserved_trials'] == 10
+
+
+@pytest.mark.parametrize('value', [0, 1, None, 'true'])
+def test_completed_only_report_requires_explicit_boolean(tmp_path, value):
+    campaign, initial, suite, quota = setup(tmp_path, max_rounds=1)
+    with pytest.raises(ValueError, match='boolean'):
+        campaign.report_test(initial, require_completed=value)
+    assert suite.resets == [] and quota.status()['reserved_trials'] == 0

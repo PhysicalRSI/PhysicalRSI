@@ -2449,3 +2449,26 @@ reported separately. Eight unique held-out cases across the two seeds yield
 and screening relative to historical studies, or treat repeats as independent
 cases. Its prepared plans reserved zero Trials before launch; results remain
 pending until completed, hash-bound native evidence is available.
+
+### Final tests after completed search only
+
+`ResearchCampaign.report_test(initial, require_completed=True)` rejects a fresh
+or partially completed campaign before dispatching research providers or Trials.
+The completion check runs under the campaign lock; accepted calls still audit
+the complete cursor lineage, round manifests and archive receipts through the
+ordinary execution path before evaluating the frozen final revision. The default
+remains compatible with callers that intentionally complete search before testing.
+
+The empirical CLI now offers mutually exclusive `--prepare-only`, `--search-only`
+and `--test-only` modes. Separate search and test commands let a study complete
+all arms before exposing held-out results. Test-only mode uses the strict core
+gate; repeating either completed phase reuses its receipts. This gate checks
+one campaign, so coordinating completion across arms remains the study driver's
+responsibility. The already-running native benchmark uses its frozen driver,
+which independently defers tests until all four searches have completed.
+
+Fourteen targeted tests passed in 9.82 seconds, including fresh and interrupted
+search rejection without new effects, completed-evidence tampering rejection,
+selection-bound final reporting, default API compatibility, and separate CLI
+phases with no repeated execution. Logs and matching source hashes are retained
+under `physicalrsi-core-checks/core-completed-test-001`.
