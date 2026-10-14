@@ -252,12 +252,15 @@ class EmpiricalContractWorker(ContractWorker):
 
 @pytest.mark.parametrize('sampler_seed', [0, 20261013])
 @pytest.mark.parametrize('elite_weighting', ['uniform', 'fractional'])
-def test_native_empirical_contract_uses_complete_panels_and_two_mutable_parameters(tmp_path,monkeypatch,sampler_seed,elite_weighting):
+@pytest.mark.parametrize('repetitions', [1, 2])
+def test_native_empirical_contract_uses_complete_panels_and_two_mutable_parameters(tmp_path,monkeypatch,sampler_seed,elite_weighting,repetitions):
     from PhysicalRSI_demos.auto_engineering import empirical
     monkeypatch.setattr(trials,'NativeWorker',EmpiricalContractWorker)
     EmpiricalContractWorker.resets=[]
     panels=dict(development=[1000,50001],validation=[[62000,62001],[62100,62101]],test=[63000,63001,63002])
-    result=empirical.run(tmp_path,sys.executable,panels=panels,strategy='adaptive',seed=sampler_seed,shared_cache=True,elite_weighting=elite_weighting)
+    options=dict(panels=panels,strategy='adaptive',seed=sampler_seed,shared_cache=True,
+                 elite_weighting=elite_weighting,repetitions=repetitions)
+    result=empirical.run(tmp_path,sys.executable,**options)
     fits=[read_json(p) for p in sorted((tmp_path/'campaign/rounds').glob('*/execution/adaptive-fit.json'))]
     assert all(f['identity']['settings']['elite_weighting']==elite_weighting for f in fits)
     assert len(fits)==2 and [f['model_ready'] for f in fits]==[False,True]
@@ -268,10 +271,18 @@ def test_native_empirical_contract_uses_complete_panels_and_two_mutable_paramete
     assert all(len(p['values'])==2 and .1<=p['values'][0]<=.55 and .15<=p['values'][1]<=.4
                for f in fits for p in f['proposals'])
     assert all(s['case']['seed'] in {1000,50001} for f in fits for s in f['samples'])
-    assert result['quota']['max_trials']==27 and result['quota']['reserved_trials']==len(EmpiricalContractWorker.resets)
+    assert result['quota']['max_trials']==27*repetitions and result['quota']['reserved_trials']==len(EmpiricalContractWorker.resets)
+    assert len(fits[0]['samples'])==2*repetitions
+    assert result['final_test']['metrics'][TASK]['planned']==3*repetitions
+    screens=list((tmp_path/'campaign/rounds').glob('*/execution/screening.json'))
+    assert screens
+    for path in screens:
+        for row in read_json(path)['output']['candidates'].values():
+            if row['measured']:
+                assert row['per_task'][TASK] == 1.
     assert result['qualification'] is None
     before=len(EmpiricalContractWorker.resets)
-    assert empirical.run(tmp_path,sys.executable,panels=panels,strategy='adaptive',seed=sampler_seed,shared_cache=True,elite_weighting=elite_weighting)==result
+    assert empirical.run(tmp_path,sys.executable,**options)==result
     assert len(EmpiricalContractWorker.resets)==before
     scheduler=read_json(tmp_path/'campaign/rounds/round-0001/execution/config.json')['identities']['evaluator']['scheduling']
     assert scheduler['workers']==1

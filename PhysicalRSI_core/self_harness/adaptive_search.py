@@ -117,7 +117,8 @@ class AdaptiveParameterEvolver:
             condition=measurement_context(value)
             row.update(values=point['values'],measurement_context=condition)
             if current:
-                if case in panel:raise ValueError('Current development has duplicate cases')
+                if case in panel and panel[case] != dict(task=value['trial']['task'],measurement_context=condition):
+                    raise ValueError('Current development repeats have different measurement conditions')
                 panel[case]=dict(task=value['trial']['task'],measurement_context=condition)
             if point['condition_sha256']!=inspected['condition_sha256']:
                 excluded.append(dict(row,reason='other_controller_inputs_changed'));return

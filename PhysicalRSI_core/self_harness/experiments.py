@@ -8,10 +8,50 @@ before exposing scores to the existing Self-Harness selector.
 from copy import deepcopy
 import math
 from pathlib import Path
+from statistics import mean
 
 from ..infra.storage import digest, file_digest, read_json
 from ..trials import Evaluation, task_case_identity
 from .selection import comparison_identity
+
+
+def repetition_count(value):
+    """Bound independent executions per case; replacements are separate."""
+    if type(value) is not int or not 1 <= value <= 100:
+        raise ValueError("Declare one to one hundred repetitions per case")
+    return value
+
+
+def _aggregate_repetitions(rows, tasks):
+    """One paired observation per case, retaining every execution's evidence.
+
+    Repeats estimate a case's mean score, not additional independent layouts.
+    A case meets success gates only when all its executions succeed. Declared
+    cost measurements retain their existing mean-per-execution interpretation.
+    """
+    groups = {}
+    for row in rows:
+        groups.setdefault((row["task"], row["layout_sha256"]), []).append(row)
+    result = []
+    for (task, layout), repeats in groups.items():
+        measurements, evidence = {}, {}
+        for key in tasks[task].get("cost_limits", {}):
+            values = [row["measurements"].get(key) for row in repeats]
+            if any(type(v) not in (int, float) or not math.isfinite(v) or v < 0 for v in values):
+                raise ValueError("Repeated measured cost must be finite and nonnegative")
+            measurements[key] = float(mean(values))
+        for row in repeats:
+            for path, sha in row["evidence_sha256"].items():
+                if path in evidence and evidence[path] != sha:
+                    raise ValueError("Conflicting repeated evaluation evidence")
+                evidence[path] = sha
+        result.append(dict(task=task, layout_sha256=layout, state="completed",
+            score=float(mean(row["score"] for row in repeats)),
+            success=all(row["success"] for row in repeats),
+            success_fraction=sum(row["success"] for row in repeats) / len(repeats),
+            measurements=measurements, evidence_sha256=evidence,
+            repetitions=len(repeats), replicates=repeats))
+    return result
 
 
 def experiment_score(receipt, *, score_measurement, score_range):
@@ -43,6 +83,7 @@ def experiment_result(runtime, run_ids, *, candidate_id, comparison, cohort,
     if cohort.get("comparison_sha256") != comparison_sha or cohort.get("split") != "validation":
         raise ValueError("Experiment cohort differs from the frozen comparison")
     identity_scheme = cohort.get("case_identity", "case/v1")
+    repetitions = repetition_count(cohort.get("repetitions", 1))
     if identity_scheme not in {"case/v1", "task-case/v1"}:
         raise ValueError("Unsupported experiment case identity scheme")
     if candidate_id not in comparison["candidates"] or not evaluator_revision:
@@ -65,7 +106,7 @@ def experiment_result(runtime, run_ids, *, candidate_id, comparison, cohort,
     if len(set(all_cases)) != len(all_cases):
         raise ValueError("Experiment cohort contains repeated cases")
     expected = {(task, case) for task, cases in layouts.items() for case in cases}
-    used, rows, protocols, system2_revisions = set(), [], [], set()
+    used, rows, protocols, system2_revisions = {}, [], [], set()
     for run_id in run_ids:
         evaluation = Evaluation.read(runtime, run_id)
         value = evaluation.to_dict()
@@ -90,7 +131,7 @@ def experiment_result(runtime, run_ids, *, candidate_id, comparison, cohort,
         system2_revisions.add(digest(origin["system2"]))
         task, case = specification["task"], specification["case"]
         pair = (task, task_case_identity(task, case) if identity_scheme == "task-case/v1" else digest(case))
-        if pair not in expected or pair in used:
+        if pair not in expected or used.get(pair, 0) >= repetitions:
             raise ValueError("Experiment cases are not paired with the frozen cohort")
         success = receipt["outcome"] == "success"
         score = experiment_score(receipt, score_measurement=score_measurement,
@@ -103,7 +144,7 @@ def experiment_result(runtime, run_ids, *, candidate_id, comparison, cohort,
             if file_digest(path) != sha:
                 raise ValueError("Experiment evidence changed while building evaluation")
             evidence[str(path.relative_to(root))] = sha
-        used.add(pair)
+        used[pair] = used.get(pair, 0) + 1
         rows.append(dict(task=pair[0], layout_sha256=pair[1], state="completed",
                          score=score, success=success, evidence_sha256=evidence,
                          trial_sha256=value["trial_sha256"], evaluation_sha256=evaluation.revision,
@@ -116,8 +157,10 @@ def experiment_result(runtime, run_ids, *, candidate_id, comparison, cohort,
             system2=origin["system2"], score_measurement=score_measurement,
             adapters={key: value for key, value in specification["adapters"].items()
                       if key != "policy"}))
-    if used != expected or len(system2_revisions) != 1:
+    if set(used) != expected or any(count != repetitions for count in used.values()) or len(system2_revisions) != 1:
         raise ValueError("Incomplete experiment cohort or mixed System 2 revisions")
+    if repetitions > 1:
+        rows = _aggregate_repetitions(rows, tasks)
     return dict(candidate_id=candidate_id,
                 kind=comparison.get("evaluation_kind", "policy_evaluation"),
                 native_exit_code=0, comparison_sha256=comparison_sha, cohort_sha256=cohort_sha,

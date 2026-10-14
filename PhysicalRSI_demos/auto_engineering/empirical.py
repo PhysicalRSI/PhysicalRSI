@@ -8,6 +8,7 @@ from pathlib import Path
 
 from PhysicalRSI_core.self_harness.adaptive_search import AdaptiveParameterEvolver
 from PhysicalRSI_core.self_harness.search_space import ParameterSpace, SearchField, finite
+from PhysicalRSI_core.self_harness.experiments import repetition_count
 from . import research as r
 from .task import case_layout
 
@@ -69,8 +70,9 @@ def _panels(value):
 def setup(workspace, python, *, panels, strategy, seed, population=2,
           device_registry=None, resource='isaac-gpu-0', gui=False,
           max_replacements=0, extra_trials=0, shared_cache=False, elite_weighting="uniform",
-          lower_tail_fraction=1.):
+          lower_tail_fraction=1., repetitions=1):
     panels = _panels(panels)
+    repetitions = repetition_count(repetitions)
     if elite_weighting not in ("uniform", "fractional"):
         raise ValueError("Declare uniform or fractional elite weighting")
     if not 0 < finite(lower_tail_fraction) <= 1:
@@ -102,8 +104,8 @@ def setup(workspace, python, *, panels, strategy, seed, population=2,
         required_checks=['complete-native-transfer-and-disturbance'], counterexample_checks=[],
         evidence={str(root/'seed/source/task.py'):r.file_digest(root/'seed/source/task.py')})})
     rounds, episodes = len(panels['validation']), len(panels['validation'][0])
-    quota = r.TrialQuota(root/'quota', max_trials=rounds*(len(panels['development'])*(1+population)
-        + episodes*(1+population))+len(panels['test'])+extra_trials)
+    quota = r.TrialQuota(root/'quota', max_trials=repetitions*(rounds*(len(panels['development'])*(1+population)
+        + episodes*(1+population))+len(panels['test']))+extra_trials)
     registry = r.DeviceRegistry(device_registry or root/'devices')
     scheduler = r.JobScheduler(root/'scheduler', capacities={'native_worker':1})
 
@@ -116,11 +118,12 @@ def setup(workspace, python, *, panels, strategy, seed, population=2,
         screening = r.ExperimentEvaluator(suite=r.PreregisteredSuite(r.Suite(python, suite.root/'screening',
             resource=resource, gui=gui, cache_root=cache_root), protocol), budgets={r.TASK:r.Budget(1,1200)}, scope=r.SCOPE,
             system2=r.Revision('isaac-empirical-screening','1'), quota=quota, device_registry=registry,
-            max_replacements=max_replacements)
+            max_replacements=max_replacements, repetitions=repetitions)
         evaluator = r.MultiFidelityEvaluator(suite=declared, budgets={r.TASK:r.Budget(1,1200)}, scope=r.SCOPE,
             system2=r.Revision('isaac-empirical-validation','1'), quota=quota, device_registry=registry,
             max_replacements=max_replacements, screening=screening, screening_resources={'native_worker':1}, minimum_success_rate=1.,
-            screen_incumbent=False, scheduler=scheduler, resources={'native_worker':1}, workers=1, wait_seconds=7200)
+            screen_incumbent=False, scheduler=scheduler, resources={'native_worker':1}, workers=1, wait_seconds=7200,
+            repetitions=repetitions)
         return r.SelfHarness(directory, state=state, proposer=r.RolloutProposer(evaluator,evolver,archive=archive),
             evaluator=evaluator, selector=r.Selector(), evolution=r.EvolutionSpec(('memory_rules',)),
             archive=archive, max_candidates=population, scope=r.SCOPE, round_context=context,

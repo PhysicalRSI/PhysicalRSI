@@ -19,7 +19,7 @@ from ..infra.storage import atomic_json, digest, file_digest, identifier, locked
 from ..infra.trial_recovery import TrialRecovery, before_execution, inactive
 from . import now
 from .artifacts import verify_harness
-from .experiments import experiment_result, experiment_score
+from .experiments import experiment_result, experiment_score, repetition_count
 from .selection import comparison_identity
 
 
@@ -47,7 +47,7 @@ def freeze_json(path, value):
 class ExperimentEvaluator:
     def __init__(self, *, suite: ExperimentSuite, budgets: dict[str, Budget],
                  scope: str, system2: Revision, quota, device_registry=None,
-                 score_measurement=None, max_replacements=0):
+                 score_measurement=None, max_replacements=0, repetitions=1):
         if (not budgets or any(not isinstance(t, str) or not t for t in budgets)
                 or any(not isinstance(b, Budget) for b in budgets.values())):
             raise ValueError("Declare an experiment budget for each task")
@@ -61,6 +61,7 @@ class ExperimentEvaluator:
         self.system2, self.quota, self.device_registry = system2, quota, device_registry
         self.score_measurement = score_measurement
         self.max_replacements = max_replacements
+        self.repetitions = repetition_count(repetitions)
         self._identity = deepcopy(self.identity())
         self.revision = digest(self._identity)
 
@@ -73,6 +74,7 @@ class ExperimentEvaluator:
                     device_registry=self.device_registry.identity() if self.device_registry else None,
                     score_measurement=self.score_measurement,
                     max_replacements=self.max_replacements,
+                    repetitions=self.repetitions,
                     implementation=dict(experiments.runtime_implementation(), **{
                         name: file_digest(path) for name, path in {
                         "evaluator": Path(__file__),
@@ -143,8 +145,10 @@ class ExperimentEvaluator:
                     cohort_sha256=digest(cohort) if cohort is not None else None,
                     cases=cases, trials=[
                         dict(task=task, case=case, budget=asdict(self.budgets[task]),
-                             run_id="trial-" + task_case_identity(task, case))
-                        for task, values in sorted(cases.items()) for case in values])
+                             run_id="trial-" + task_case_identity(task, case)
+                             + (f"-repeat-{repeat:03d}" if self.repetitions > 1 else ""))
+                        for task, values in sorted(cases.items()) for case in values
+                        for repeat in range(self.repetitions)])
 
     def _reservations(self, directory, plan):
         return {digest(dict(directory=str(directory), run_id=row["run_id"])):
@@ -366,6 +370,8 @@ class ExperimentEvaluator:
                           generated_at=generated_at, layouts=layouts,
                           admission_evidence={str(p.relative_to(output)): file_digest(p)
                                               for p in (path, development_path)})
+            if self.repetitions > 1:
+                cohort["repetitions"] = self.repetitions
             freeze_json(cohort_path, cohort)
             plans = []
             for candidate_id, sha in comparison["candidates"].items():
@@ -390,7 +396,8 @@ class ExperimentEvaluator:
         if comparison["candidates"].get(candidate["id"]) != sha:
             raise ValueError("Candidate is absent from the frozen pool")
         if (read_json(output / "validation-cohort.json") != cohort
-                or cohort["comparison_sha256"] != digest(comparison)):
+                or cohort["comparison_sha256"] != digest(comparison)
+                or repetition_count(cohort.get("repetitions", 1)) != self.repetitions):
             raise ValueError("Validation cohort changed")
         for name, expected in cohort["admission_evidence"].items():
             if file_digest(output / relative_path(name)) != expected:
@@ -466,9 +473,14 @@ class ExperimentEvaluator:
             metrics = {}
             for task, values in cases.items():
                 outcomes = [row["outcome"] for row in rows if row["task"] == task]
-                metrics[task] = dict(planned=len(values), successes=outcomes.count("success"),
+                metrics[task] = dict(planned=len(outcomes), successes=outcomes.count("success"),
                     failures=outcomes.count("failure"), uncertain=outcomes.count("uncertain"),
-                    invalid=outcomes.count("invalid"), success_rate=outcomes.count("success") / len(values))
+                    invalid=outcomes.count("invalid"), success_rate=outcomes.count("success") / len(outcomes))
+                if self.repetitions > 1:
+                    metrics[task].update(cases=len(values), repetitions=self.repetitions,
+                        case_success_rate=sum(all(row["outcome"] == "success" for row in rows
+                            if row["task"] == task and row["case_sha256"] == digest(case))
+                            for case in values) / len(values))
             report = dict(schema="physicalrsi.final-test/v1", candidate_sha256=sha,
                           selection_sha256=selection_sha256, evaluator_revision=self.revision,
                           episodes=rows, metrics=metrics, scope=self.scope, qualification=None,

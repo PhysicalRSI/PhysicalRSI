@@ -169,7 +169,7 @@ class MultiFidelityEvaluator(ScheduledEvaluator):
             if any(row["outcome"] not in {"success", "failure"} for row in result["episodes"]):
                 raise ReconciliationRequired("Screening has no definite outcome; full validation was not dispatched")
             per_task = {task: sum(row["outcome"] == "success" for row in result["episodes"] if row["task"] == task)
-                        / len(values) for task, values in cases.items()}
+                        / sum(row["task"] == task for row in result["episodes"]) for task in cases}
             passed = all(score >= self.minimum_success_rate for score in per_task.values())
             incumbent = candidate["id"] == parent["id"]
             admissions[candidate["id"]] = dict(accepted=incumbent or passed,

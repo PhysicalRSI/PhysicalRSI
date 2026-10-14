@@ -2301,3 +2301,42 @@ are retained under
 `/cpfs02/user/yanming/physicalrsi-core-checks/native-scenario-diagnostic-001`.
 These two fixed-policy Trials validate scenario integration on the declared
 cases, not an adaptive-search gain or broad scenario generalization.
+
+### Repeated execution of frozen cases
+
+`ExperimentEvaluator(..., repetitions=3)` preregisters three independent
+executions of each case in development, validation and final tests. The
+default is one; the count must be an integer from 1 to 100 and is part of the
+frozen evaluator identity. Cases and split identities remain unchanged.
+Execution IDs distinguish repeats, the entire pool is reserved before its
+first effect, and resuming reuses completed receipts. Repetition is separate
+from the explicit replacement allowance for interrupted Trials.
+
+Development exposes every verified Evaluation. Adaptive parameter search
+accepts repeated current-case observations only under matching measurement
+conditions, and averages them per case before task or lower-tail aggregation.
+Screening rates include every execution in the denominator. A repeated
+validation case contributes one mean score to paired selection; its boolean
+success gate passes only when every repeat succeeded. Declared cost limits
+use mean cost per execution. Aggregate rows retain all raw repeat rows and
+their evidence. Missing repeats or uncertain validation outcomes cannot be
+dropped. The profile's `episodes` and statistical comparison denominator
+continue to count unique cases, not resets of the same case.
+
+Final reports retain every outcome, including invalid and uncertain ones,
+and report both execution success rate and the fraction of cases whose
+repeats all succeeded. `auto_engineering.empirical.setup(..., repetitions=3)`
+forwards the policy to both screening and full evaluation and expands its
+declared Trial budget; replacement capacity is still separately allocated.
+These semantics do not guarantee independent simulator randomness or a
+benchmark gain. The already-running `native-matched-bench-005` remains on its
+original frozen source and single-execution protocol.
+
+The complete software suite passed 938 tests in 194.45 seconds. New coverage
+exercises mixed repeated outcomes, complete case coverage, uncertainty,
+whole-plan budget admission, interruption recovery, evidence tampering,
+unchanged unique-case confidence denominators, and two-round Isaac contract
+campaigns with repeated screening, archival feedback and final reporting.
+The source audit and test log are retained under
+`/cpfs02/user/yanming/physicalrsi-core-checks/core-repetitions-001`.
+This validates the execution contract, not a native benchmark improvement.
