@@ -7,5 +7,5 @@ if [[ -x "${ROOT_DIR}/.venv/bin/python" ]]; then
   PYTHON_BIN="${ROOT_DIR}/.venv/bin/python"
 fi
 
-export PYTHONPATH="${ROOT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
-exec "${PYTHON_BIN}" -m PhysicalRSI "$@"
+export PYTHONPATH="${ROOT_DIR}/src:${ROOT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+exec "${PYTHON_BIN}" -m physicalrsi.cli "$@"

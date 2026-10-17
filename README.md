@@ -45,6 +45,22 @@ Bring your own robot, simulator, policy, and research questions. Compose them in
 
 ## Quick guidance
 
+Phase 1 also provides a small task-independent framework facade. It reuses the
+existing Core Self-Harness and Autoresearch engines while adding a versioned
+skill protocol, registry, composition adapter, environment protocol and
+immutable report bundle. The historical launcher and application remain
+available.
+
+```bash
+./physicalrsi study robodyna --fixture --workspace /tmp/physicalrsi-robodyna
+# Repeat the same command to audit/resume without duplicating completed trials.
+```
+
+This runs a deterministic contract fixture with `EstimateMotion`,
+`PredictIntercept` and `MoveToTarget`; it writes trajectory and research
+artifacts without claiming RoboDyna or physical qualification. See
+[`docs/physicalrsi-framework.md`](docs/physicalrsi-framework.md).
+
 For hypothesis-driven robot protocol experiments, see
 [PhysicalRSI Autoresearch](PhysicalRSI_Autoresearch/README.md): a resumable
 liquid-handling research loop with upstream Opentrons simulation, independent

@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = ["rich>=13,<15", "prompt-toolkit>=3,<4", "jsonschema>=4.23,<5"]
 
 [project.scripts]
-physicalrsi = "PhysicalRSI.cli:main"
+physicalrsi = "physicalrsi.cli:main"
 
 [project.optional-dependencies]
 real-robot = ["numpy>=1.26,<3", "scipy>=1.11,<2", "Pillow>=10,<13", "h5py>=3.8,<4", "av>=12,<17"]
@@ -23,7 +23,8 @@ test = ["pytest>=8,<10", "numpy>=1.26,<3", "Pillow>=10,<12", "scipy>=1.11,<2"]
 test-parallel = ["pytest-xdist>=3.8,<4"]
 
 [tool.setuptools.packages.find]
-include = ["PhysicalRSI*", "examples*"]
+where = [".", "src"]
+include = ["PhysicalRSI*", "examples*", "physicalrsi*"]
 exclude = ["PhysicalRSI_baselines.robodojo.XPolicyLab*", "PhysicalRSI_baselines.robodojo.releases*"]
 
 [tool.setuptools.package-data]
@@ -43,4 +44,4 @@ exclude = ["PhysicalRSI_baselines.robodojo.XPolicyLab*", "PhysicalRSI_baselines.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = [".", "src"]
