@@ -1,5 +1,11 @@
 # Architecture
 
+The public launcher enters `src/physicalrsi/cli.py`. Study and registry commands
+use the lowercase framework API; application commands continue through
+`PhysicalRSI.cli`. The [Phase 1 framework guide](physicalrsi-framework.md) maps
+these adapters to the existing implementations, and the
+[migration guide](../migrations/phase1.md) explains persisted compatibility.
+
 ## Ownership and composition
 
 `PhysicalRSI/Embodied_Harness` is the shared capability domain for Memory, Tool, and Skill. These capabilities can call one another and can be composed through explicit contracts. `PhysicalRSI_core` owns the single Self-Harness loop and the infrastructure layer; it does not import the capability domain, the CLI, or a baseline implementation. The application injects proposal, evaluation, selection, and capability components.
@@ -51,7 +57,8 @@ The infrastructure layer provides atomic storage, POSIX locking, bounded executi
 
 ## User-facing paths
 
-The product has two workflows: demo and baseline. `/demo` loads the local Memory → Tool → Skill example, which `/run` executes. `/task` loads a task package; `/baseline` runs the shared preflight check and then invokes the task's baseline once. Both workflows use the same `Application` command table and execution layer. Configuration and inspection commands support these workflows. An optional model turns natural-language requests into bounded tool calls; model conversation is not capability state or version truth.
+The application has two workflows: demo and baseline. The unified CLI also
+provides `study` and `skills` commands through the framework facade. `/demo` loads the local Memory → Tool → Skill example, which `/run` executes. `/task` loads a task package; `/baseline` runs the shared preflight check and then invokes the task's baseline once. Both workflows use the same `Application` command table and execution layer. Configuration and inspection commands support these workflows. An optional model turns natural-language requests into bounded tool calls; model conversation is not capability state or version truth.
 
 Task packages use `physicalrsi.task/v1` and provide a factory with `check`, `run`, `evolve`, and `status` operations. Baseline execution reads the committed capability version and reports scope and qualification explicitly. The interface does not infer physical success from the existence of an adapter.
 

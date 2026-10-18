@@ -45,31 +45,6 @@ Bring your own robot, simulator, policy, and research questions. Compose them in
 
 ## Quick guidance
 
-Phase 1 also provides a small task-independent framework facade. It reuses the
-existing Core Self-Harness and Autoresearch engines while adding a versioned
-skill protocol, registry, composition adapter, environment protocol and
-immutable report bundle. The historical launcher and application remain
-available.
-
-```bash
-./physicalrsi study robodyna --fixture --workspace /tmp/physicalrsi-robodyna
-# Repeat the same command to audit/resume without duplicating completed trials.
-```
-
-This runs a deterministic contract fixture with `EstimateMotion`,
-`PredictIntercept` and `MoveToTarget`; it writes trajectory and research
-artifacts without claiming RoboDyna or physical qualification. See
-[`docs/physicalrsi-framework.md`](docs/physicalrsi-framework.md).
-
-For hypothesis-driven robot protocol experiments, see
-[PhysicalRSI Autoresearch](PhysicalRSI_Autoresearch/README.md): a resumable
-liquid-handling research loop with upstream Opentrons simulation, independent
-liquid auditing, and recorded keep/discard decisions. The v0.1 research
-coordination checkpoint also adds scoped memory, durable hypothesis/experiment
-records and evidence-backed heartbeat reviews for external research agents.
-It runs software protocols and does not establish wet-lab qualification.
-
-
 ```bash
 git clone --recurse-submodules https://github.com/PhysicalRSI/PhysicalRSI.git
 cd PhysicalRSI
@@ -96,20 +71,53 @@ You can also run `physicalrsi preview piano` directly from your shell. The comma
 
 For conversation, configure `/model configs/model.example.json`, then ask “Open the piano demo” or “Generate two Dexjoco layouts”. The model uses the same commands as the terminal. [Full CLI guide →](docs/cli.md)
 
+## Compose skills and run a study
+
+The `physicalrsi` Python API connects reusable skills to the existing
+Self-Harness and Autoresearch engines. Run the small CPU contract experiment:
+
+```bash
+./physicalrsi study robodyna --fixture --workspace /tmp/physicalrsi-robodyna
+./physicalrsi skills --root /tmp/physicalrsi-robodyna/registry
+```
+
+The study composes `EstimateMotion → PredictIntercept → MoveToTarget` and evolves
+only `PredictIntercept`. It records the comparison, trajectories, parameter diff
+and a Markdown report at `/tmp/physicalrsi-robodyna/report/report.md`. Repeat the
+study command with the same workspace to resume or inspect its completed result.
+This example validates the software contracts using a constant-velocity fixture;
+native RoboDyna integration is a separate step.
+
+[Framework and extension guide](docs/physicalrsi-framework.md) ·
+[Migration and compatibility](migrations/phase1.md)
+
+For hypothesis-driven robot protocol experiments, see
+[PhysicalRSI Autoresearch](PhysicalRSI_Autoresearch/README.md). Its resumable
+liquid-handling loop uses upstream Opentrons simulation, independent liquid
+auditing, and recorded keep/discard decisions. Research agents can use scoped
+memory, durable hypothesis/experiment records, and evidence-backed heartbeat
+reviews. These are software protocol experiments; wet-lab qualification requires
+physical evaluation.
+
 ## Project structure and conventions
 
 ```text
+physicalrsi             public executable launcher
+src/physicalrsi/        unified Python API, CLI and adapters
+examples/robodyna/      composable skill study and contract fixture wiring
 PhysicalRSI/             terminal, conversation, memory, tools and skills
 PhysicalRSI_core/        experiment runtime, Self-Harness, evidence and lineage
+PhysicalRSI_Autoresearch/ research records, hypotheses and review workflows
 PhysicalRSI_baselines/   benchmark integrations and pinned upstream code
 PhysicalRSI_demos/       piano, Dexjoco, recordings and runnable examples
 configs/                task and model configuration examples
 docs/                   setup, architecture and development notes
+migrations/             compatibility and migration instructions
 ```
 
-**PhysicalRSI-core** carries the improvement loop: propose → evaluate → select → inherit. The preview's Self-Harness is joined by a shared experiment runtime that records initial conditions, actions, observations and an independent outcome.
+**PhysicalRSI_core** carries the improvement loop: propose → evaluate → select → inherit. The preview's Self-Harness is joined by a shared experiment runtime that records initial conditions, actions, observations and an independent outcome.
 
-A few conventions keep contributions useful across systems: declare the task and budget, version what changes, retain the evidence, and distinguish a completed process from a successful task. Keep generated datasets, model weights and credentials outside the source tree. Python packages use underscores in their directory names.
+A few conventions keep contributions useful across systems: declare the task and budget, version what changes, retain the evidence, and distinguish a completed process from a successful task. Keep generated datasets, model weights and credentials outside the source tree. The lowercase public API lives under `src/`; existing package imports remain supported.
 
 [Core guide](PhysicalRSI_core/README.md) · [Architecture](docs/architecture.md) · [Development guide](AGENTS.md)
 

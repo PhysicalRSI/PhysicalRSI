@@ -65,25 +65,62 @@ videos are omitted. Reopening a completed study audits existing campaign and
 record evidence without dispatching new trials. Unknown interrupted effects
 still require Core reconciliation; the facade does not blindly retry them.
 
-## Deferred changes and unverified integrations
+## Skill identity and extension
 
-- Native RoboDyna installation, observation/action mapping, simulator scoring,
-  timing and video export are unverified. `--fixture` is mandatory.
-- No real hardware or RoboDyna benchmark performance is claimed.
-- Test cases are held-out conditions within the fixture, **not held-out tasks**.
-  Cross-task generalization must later compare the same revised skill in
-  multiple frozen compositions, with independent held-out tasks used only for
-  reporting. Current fixture success is not evidence of such transfer.
-- Future skill libraries may use perception/manipulation/verification/recovery
-  folders. Phase 1 does not invent executable grasp or recovery implementations.
-- The registry loads data only. After process restart callers must explicitly
-  supply a trusted implementation with the recorded identity; no plugin loading
-  or code import from untrusted manifests occurs.
-- General branching, loops, automatic graph search, ontology enumeration,
-  cross-embodiment conversion and distributed research are deferred.
-- Providers remain responsible for correctly binding implementation revisions.
-  File hashes verify identity, not scientific validity or tamper resistance
-  against an actor able to replace the whole workspace.
+`SkillRegistry` stores content-addressed descriptors. Its registry revision hashes
+the complete descriptor; the descriptor's `revision` identifies the provider
+implementation. After restarting, supply the matching trusted implementation
+when loading a skill. The registry checks identity and leaves implementation
+loading to the caller. See the [migration example](../migrations/phase1.md).
 
-Keep the full study workspace when archiving: the report references original
-research evidence and is not a replacement for lineage, memory and round receipts.
+To add a skill, define its input and output contracts, implementation revision
+and effects through `CallableSkill`. Compose compatible skills with `sequence`;
+adjacent contracts must agree on semantic type, units, frame and embodiment.
+Use an explicit conversion when two embodiments require different representations.
+Providers bind implementation revisions to the code they execute.
+
+Organize reusable capabilities by their role as the library grows:
+
+```text
+skills/
+  perception/      locate_object, estimate_pose
+  manipulation/    approach, grasp, lift, insert
+  verification/    check_grasp, check_completion
+  recovery/        retry_grasp, recover_from_slip
+```
+
+These are proposed capability categories. The executable Phase 1 example is the
+three-skill interception sequence. Benchmark task selection and evaluation seeds
+belong in study adapters, while skills receive observations and parameters.
+
+## Environment integration and evaluation
+
+`environments/protocol.py` exposes Core's environment ports. The current
+`environments/robodyna.py` implementation is a software contract fixture, selected
+explicitly with `--fixture`. Native RoboDyna observation/action mapping, simulator
+scoring, timing and video export still need integration verification. Environment
+support determines whether a report includes video; the fixture emits trajectories.
+
+The fixture's report-only cases test held-out conditions within one study.
+To evaluate transfer, reuse the revised skill in multiple frozen compositions
+and measure independent held-out tasks. That evaluation will establish whether
+an improvement benefits other tasks or embodiments.
+
+## Research artifacts and resumption
+
+Keep the complete study workspace when archiving. The Markdown report references
+original research evidence; lineage, memory and round receipts remain in the
+workspace. Content hashes verify artifact identity, while the verifier and
+experimental design determine what conclusions the evidence supports.
+
+A completed study can be reopened without allocating new trials. Interrupted
+campaigns resume through Core's persisted stage records. An external operation
+with an unknown outcome requires reconciliation before another dispatch.
+
+## Next increments
+
+Subsequent phases can connect embodiment profiles and theory-driven primitive
+skill definitions to these contracts, then extend serial composition with
+branching, recovery and graph search. Ontology enumeration, cross-embodiment
+conversion and distributed research remain separate work items. Phase 1 keeps
+the existing engines and persisted campaigns as the foundation.
