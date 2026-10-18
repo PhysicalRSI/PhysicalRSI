@@ -86,7 +86,48 @@ only `PredictIntercept`. It records the comparison, trajectories, parameter diff
 and a Markdown report at `/tmp/physicalrsi-robodyna/report/report.md`. Repeat the
 study command with the same workspace to resume or inspect its completed result.
 This example validates the software contracts using a constant-velocity fixture;
-native RoboDyna integration is a separate step.
+it does not run the native benchmark.
+
+After preparing the [isolated RoboDyna runtime](PhysicalRSI_baselines/robodyna/README.md),
+run the two-task native study:
+
+```bash
+./physicalrsi study robodyna --native \
+  --upstream "$ROBODYNA_ROOT" \
+  --python "$ROBODYNA_VENV/bin/python" \
+  --runtime-env "$ROBODYNA_RUNTIME/environment.json" \
+  --evaluation-mode frozen \
+  --workspace /tmp/physicalrsi-robodyna-native
+```
+
+The native study shares `motion_estimation → intercept_prediction → intercept_planning`
+between `catch_ramp_ball` and `catch_valley_ball`. It uses simulator-state
+observations and native interactive robot execution. Ramp development can
+propose a bounded prediction revision; the frozen survivor then transfers to
+Valley without tuning. Keeping the parent is a valid research outcome. Repeat
+the same command to resume; use a separate workspace for a different protocol.
+See the [native study protocol and evidence](docs/robodyna-native-study.md) for
+seed separation, native scoring and inference timing scope.
+The [executed pilot results](docs/robodyna-results.md) distinguish interface reuse,
+paired selection and independent task outcomes.
+
+After that study completes, start joint evolution in a new workspace:
+
+```bash
+./physicalrsi study robodyna --native \
+  --upstream "$ROBODYNA_ROOT" \
+  --python "$ROBODYNA_VENV/bin/python" \
+  --runtime-env "$ROBODYNA_RUNTIME/environment.json" \
+  --joint-after /tmp/physicalrsi-robodyna-native \
+  --worker-output /tmp/physicalrsi-robodyna-joint-workers \
+  --workspace /tmp/physicalrsi-robodyna-joint
+```
+
+Joint evolution inherits the verified survivor and uses fresh seeds on both
+tasks. `--worker-output` selects a staging directory; Core retains exported
+worker evidence in the campaign. Resume requires the campaign's pinned source
+and runtime configuration. Use an archived checkout to resume a historical
+campaign after executable source changes.
 
 [Framework and extension guide](docs/physicalrsi-framework.md) ·
 [Migration and compatibility](migrations/phase1.md)
