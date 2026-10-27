@@ -47,11 +47,11 @@ continuation and before lengthy new experiments. When pending, verify current
 processes and new results, reflect on the causal hypothesis, use autoresearch
 to compare alternatives when progress stalls, and record an evidence-backed
 review through `PhysicalRSI_Autoresearch.heartbeat.ResearchHeartbeat.complete`.
-A queued timer event is not a completed research review. Do not provision new
-experiment instances for any benchmark in the simulation or agent partitions.
-Other partitions may be used when eligible spare capacity is verified; release
-borrowed capacity after use. Check the current quota identity before provisioning;
-historical launchers do not override this policy. Do not mutate active experiment sources.
+A queued timer event is not a completed research review. Experiment instances
+may use the simulation, agent, or other partitions when eligible spare capacity
+is verified. Check the current quota identity and permissions before provisioning,
+and release borrowed capacity after use. Historical launchers do not replace
+current capacity checks. Do not mutate active experiment sources.
 
 On continuation, inspect the explicit research index at
 `/cpfs02/user/shaoyanming/egl_runtime/autoresearch-pipeline-001/index.json` with

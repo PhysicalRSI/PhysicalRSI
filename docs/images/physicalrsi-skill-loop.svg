@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+<title id="title">From primitive skills to evidence-backed revisions</title>
+<desc id="desc">System 1 composes primitive skills and executes them through an environment adapter. Observations and outcomes feed System 2, which proposes, evaluates and selects a revision. Recorded lineage links the selected version back to the skill composition. Autoresearch tracks the surrounding research workflow.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#557f78" stroke-width="1.5"/></marker></defs>
+<rect x="1" y="1" width="1198" height="358" rx="20" fill="#f6f5ef" stroke="#d9e1d9"/>
+<g font-family="DejaVu Sans,Arial,sans-serif">
+<text x="40" y="40" fill="#254c46" font-size="12" font-weight="700" letter-spacing="2">SYSTEM 1</text>
+<text x="160" y="40" fill="#61756f" font-size="12">Execute the current skills</text>
+<text x="40" y="196" fill="#254c46" font-size="12" font-weight="700" letter-spacing="2">SYSTEM 2</text>
+<text x="160" y="196" fill="#61756f" font-size="12">Self-Harness · compare before adopting</text>
+<g fill="#fffefa" stroke="#ccdcd2"><rect x="40" y="65" width="220" height="74" rx="12"/><rect x="310" y="65" width="220" height="74" rx="12"/><rect x="580" y="65" width="220" height="74" rx="12"/><rect x="850" y="65" width="310" height="74" rx="12"/></g>
+<g fill="#e4eee6" stroke="#b9cec0"><rect x="40" y="220" width="220" height="74" rx="12"/><rect x="310" y="220" width="220" height="74" rx="12"/><rect x="580" y="220" width="220" height="74" rx="12"/><rect x="850" y="220" width="310" height="74" rx="12"/></g>
+<g text-anchor="middle" fill="#193f38" font-size="17" font-weight="600"><text x="150" y="96">Primitive skills</text><text x="420" y="96">Composition</text><text x="690" y="96">Execution</text><text x="1005" y="96">Environment adapter</text><text x="150" y="251">Select &amp; inherit</text><text x="420" y="251">Paired evaluation</text><text x="690" y="251">Propose a revision</text><text x="1005" y="251">Observations &amp; outcomes</text></g>
+<g text-anchor="middle" fill="#60766b" font-size="12"><text x="150" y="119">Estimate · predict · move</text><text x="420" y="119">Typed inputs and outputs</text><text x="690" y="119">Actions and feedback</text><text x="1005" y="119">Simulator or robot interface</text><text x="150" y="274">Versioned skills and lineage</text><text x="420" y="274">Parent and candidate</text><text x="690" y="274">Development evidence</text><text x="1005" y="274">Trajectories and verified results</text></g>
+<g fill="none" stroke="#557f78" stroke-width="1.6" marker-end="url(#arrow)"><path d="M263 102H302"/><path d="M533 102H572"/><path d="M803 102H842" marker-start="url(#arrow)"/><path d="M1005 142V212"/><path d="M847 257H808"/><path d="M577 257H538"/><path d="M307 257H268"/><path d="M150 217V175H420V147"/></g>
+<path d="M40 318H1160" stroke="#d9e1d9"/>
+<text x="40" y="342" fill="#254c46" font-size="11" font-weight="700" letter-spacing="1.5">AUTORESEARCH</text><text x="195" y="342" fill="#61756f" font-size="12">Hypotheses · experiment records · decisions · research memory</text>
+</g>
+</svg>
