@@ -1,6 +1,5 @@
 """Composition root shared by CLI commands and Python consumers."""
 
-import math
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -8,10 +7,10 @@ from pathlib import Path
 from PhysicalRSI.Embodied_Harness.memory.store import MemoryStore
 from PhysicalRSI.Embodied_Harness.skills.composition import identity, sequence
 from PhysicalRSI.Embodied_Harness.tools.registry import Registry
-from PhysicalRSI_core.contracts import Context, Contract, Operation
+from PhysicalRSI_core.contracts import Context
 from PhysicalRSI_core.infra.execution import Execution
 from PhysicalRSI_core.infra.executor import Executor
-from PhysicalRSI_core.infra.storage import atomic_json, digest, file_digest, read_json
+from PhysicalRSI_core.infra.storage import atomic_json, digest, read_json
 
 
 class Application:
@@ -157,27 +156,7 @@ class Application:
     def evolve(self):
         if self.task_binding is not None:
             return self.active_task().backend.evolve()
-        return self.evolve_example()
-
-    def run_baseline(self, value=None):
-        """Check and run the active task in one explicit, auditable action."""
-        if self.task_binding is None:
-            raise ValueError("Load a task package with /task path.json first")
-        check = self.check_task()
-        if not isinstance(check, dict) or check.get("ready") is not True:
-            raise ValueError("Baseline preflight failed: " + str(check))
-        result = self.active_task().backend.run(value)
-        return {
-            "schema": "physicalrsi.baseline-run/v1",
-            "baseline": self.task_binding["specification"]["name"],
-            "rsi_plan": dict(self._rsi_plan),
-            "check": check,
-            "result": result,
-            "qualification": (
-                result.get("qualification") if isinstance(result, dict) else None
-            ),
-            "scope": "task backend result; physical qualification remains adapter-defined",
-        }
+        raise ValueError("Load a user task package before evolving")
 
     def language_model(self):
         from PhysicalRSI_core.infra.language import LanguageModel, ModelConfig
@@ -216,7 +195,7 @@ class Application:
                 "message": "Hello world!",
                 "model": None,
                 "configuration": {
-                    "command": "/model configs/model.example.json",
+                    "command": "/model /path/to/model.json",
                     "api_key_env": "PHYSICALRSI_API_KEY",
                     "note": "Set the named environment variable before using model-backed chat.",
                 },
@@ -225,39 +204,6 @@ class Application:
         if self.conversation is None:
             self.conversation = Conversation(self, self.language_model())
         return self.conversation.ask(text)
-
-    def demo(self) -> dict:
-        """Install explicit software examples, without implicit robot connections."""
-        (self.workspace / "task.json").unlink(missing_ok=True)
-        self.task_binding = self.task_session = None
-        degrees = Contract("joint-path", "degree", "joint", "example-2dof")
-        radians = Contract("joint-path", "radian", "joint", "example-2dof")
-        snapshot = self.memory.snapshot(
-            {"approach": [[0.0, 30.0], [20.0, 45.0], [30.0, 60.0]]}
-        )
-        revision = file_digest(Path(__file__))
-        operations = [
-            snapshot.reader("approach", degrees),
-            Operation(
-                "tool.to_radians",
-                revision,
-                degrees,
-                radians,
-                lambda path, _: [[math.radians(v) for v in row] for row in path],
-            ),
-            Operation(
-                "skill.reverse",
-                revision,
-                radians,
-                radians,
-                lambda path, _: list(reversed(path)),
-            ),
-        ]
-        for operation in operations:
-            if operation.name not in {op.name for op in self.registry.list()}:
-                self.registry.register(operation)
-        self.compose("return_path", [op.name for op in operations])
-        return {"scope": "local software example", "recipe": self.describe()}
 
     def compose(self, name: str, steps: list[str]) -> dict:
         operations = {op.name: op for op in self.registry.list()}
@@ -282,12 +228,6 @@ class Application:
             "input": asdict(composed.input),
             "output": asdict(composed.output),
         }
-
-    def skill_memory_demo(self) -> dict:
-        """Persist and show the core skill/task exploration-memory catalog."""
-        from PhysicalRSI_demos.skill_memory import build_catalog
-
-        return build_catalog(self.workspace / "skill-memory")
 
     def save(self, path) -> dict:
         if self.recipe is None:
@@ -321,7 +261,7 @@ class Application:
         if self.task_binding is not None:
             return self.active_task().backend.run(value)
         if self.recipe is None:
-            raise ValueError("Compose a recipe first; /demo loads the local example")
+            raise ValueError("Compose a recipe before running it")
         operation = self.recipe[0]
         run_id = uuid.uuid4().hex
         path = self.workspace / "runs" / (run_id + ".json")
@@ -362,39 +302,6 @@ class Application:
             "recipe": self.describe(),
             "rsi_plan": dict(self._rsi_plan),
             "resources": self.executor.pool.status(),
-            "baselines": "RoboDojo software baseline implemented; native reproduction not qualified",
-        }
-
-    def evaluation_status(self) -> dict:
-        """Read separately recorded evaluation runs without merging candidates."""
-        root = Path.cwd() / ".release-staging" / "archive-dsw-eval"
-        comparison = root / "LIVE_COMPARISON.json"
-        try:
-            snapshot = read_json(comparison)
-            if not isinstance(snapshot.get("runs"), dict):
-                raise ValueError("Evaluation snapshot has no separate run records")
-        except (OSError, ValueError, AttributeError) as error:
-            return {
-                "status": "unavailable",
-                "source": str(comparison),
-                "error": str(error),
-                "scope": "local diagnostic status; not a leaderboard score",
-            }
-        runs = {}
-        for name, record in snapshot["runs"].items():
-            rows = record.get("results", [])
-            runs[name] = {
-                "completed": sum(row.get("status") == "complete" for row in rows),
-                "unresolved": [row["task"] for row in rows
-                               if row.get("status") != "complete"],
-                "results": rows,
-                "score_review": record.get("score_review", []),
-            }
-        return {
-            "source": str(comparison),
-            "runs": runs,
-            "reference": snapshot.get("reference"),
-            "scope": "Separate candidate diagnostics; unresolved records do not establish live workers or zero scores.",
         }
 
     def tools(self):
@@ -407,8 +314,3 @@ class Application:
             [ToolBinding(operation, operation.name) for operation in operations],
             execution=self.execution,
         )
-
-    def evolve_example(self) -> dict:
-        from PhysicalRSI_demos.runtime_evolution import run
-
-        return run(self.workspace / "self_harness_example")

@@ -48,8 +48,6 @@ an observation becomes an estimate, an estimate becomes a plan, and a plan
 becomes an action. Skills can be registered, composed, changed, evaluated, and
 carried into the next research round.
 
-![PhysicalRSI: compose skills and evolve with evidence](docs/images/physicalrsi-hero.svg)
-
 ```text
 observations and memory
           ↓
@@ -64,8 +62,6 @@ trajectory and outcome evidence
 System 2 proposes and evaluates skill changes
 ```
 
-![From primitive skills to evidence-backed revisions](docs/images/physicalrsi-skill-loop.svg)
-
 PhysicalRSI is designed to provide the research loop of a self-improving agent
 CLI while keeping the evidence and execution boundaries explicit. A skill does
 not depend on a benchmark task name, evaluation seed, simulator actor, or
@@ -74,7 +70,7 @@ hidden score. Those details belong to the environment and evaluation adapter.
 ## Install
 
 ```bash
-git clone --recurse-submodules https://github.com/PhysicalRSI/PhysicalRSI.git
+git clone https://github.com/PhysicalRSI/PhysicalRSI.git
 cd PhysicalRSI
 python3 -m venv .venv
 source .venv/bin/activate
@@ -87,7 +83,7 @@ The repository launcher works without installing a console script:
 ./physicalrsi --plain --workspace /tmp/physicalrsi-check --command '/help'
 ```
 
-![The PhysicalRSI terminal](docs/media/physicalrsi-terminal.png)
+![The PhysicalRSI terminal](assets/physicalrsi-terminal.png)
 
 ## The four mainline ideas
 
@@ -278,15 +274,14 @@ commands:
 | Area | Commands |
 | --- | --- |
 | Plan and harness | `/scheme`, `/rsi-plan`, `/harness` |
-| Task package | `/task`, `/draft`, `/check`, `/baseline` |
+| Task package | `/task`, `/draft`, `/check` |
 | Research loop | `/rsi`, `/evolve`, `/status` |
 | Skill and composition | `/skills`, `/tools`, `/memory`, `/compose`, `/run` |
 | Conversation | `/model`, `/chat`, `/reset-chat` |
-| Local examples | `/demo`, `/skill-memory` |
 
-Run `/help` for the complete command registry. The older preview and baseline
-workbench remains available through the compatibility CLI; it is separate from
-the mainline research API.
+Run `/help` for the complete command registry. Task-specific adapters and
+recorded studies are maintained on the `benchmarks-and-demos` branch and are
+separate from the mainline research API.
 
 ## Repository layout
 
@@ -295,17 +290,14 @@ src/physicalrsi/          public skill, registry, composition, environment,
                           reporting, and CLI façade
 PhysicalRSI_core/         Self-Harness, campaigns, experiments, lineage,
                           evidence, memory, and persistence
-PhysicalRSI_Autoresearch/ durable research records and workflow integration
-PhysicalRSI_demos/        small CPU demonstrations and compatibility examples
-PhysicalRSI_baselines/    external-provider and benchmark adapters
-examples/                 user-facing studies and task examples
-configs/                  task, model, and harness descriptors
+PhysicalRSI_Autoresearch/ durable research records and review heartbeat
 tests/                    release and research-core tests
 ```
 
 The lowercase package is the stable public surface. The historical
-`PhysicalRSI` package remains in the repository so existing applications and
-published records continue to work.
+`PhysicalRSI` package remains as a lightweight task and conversation
+compatibility layer. Benchmark adapters, demonstrations, recordings, and
+task-specific examples live on `benchmarks-and-demos`.
 
 ## Quality checks
 
@@ -313,10 +305,9 @@ Use a temporary workspace for every run. Do not commit generated workspaces,
 caches, model checkpoints, simulator output, or credentials.
 
 ```bash
-./physicalrsi --plain --workspace /tmp/physicalrsi-check --command '/demo'
-./physicalrsi --plain --workspace /tmp/physicalrsi-skill-check --command '/skill-memory'
-python -m compileall -q -x '/XPolicyLab/' \
-  PhysicalRSI PhysicalRSI_core PhysicalRSI_demos PhysicalRSI_baselines src examples
+./physicalrsi --help
+./physicalrsi --plain --workspace /tmp/physicalrsi-check --command '/help'
+python -m compileall -q PhysicalRSI PhysicalRSI_core PhysicalRSI_Autoresearch src
 python -m pytest -q
 ```
 

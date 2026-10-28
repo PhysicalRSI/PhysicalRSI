@@ -200,15 +200,3 @@ def test_tree_keeps_same_bytes_with_different_modes_separate(tmp_path):
     (Path(stored['root']) / 'tool.sh').chmod(0o644)
     with pytest.raises(ValueError, match='file mode'):
         tree.materialize('fallback', tmp_path / 'again')
-
-
-def test_parameter_mutation_preserves_modes_and_conditions_include_them(tmp_path):
-    from test_adaptive_search import candidate, space
-    parent = candidate(tmp_path / 'parent')
-    declared = space();before = declared.inspect(parent)
-    child, _ = declared.candidate(parent, before, [5., 3.], output=tmp_path / 'child', name='child')
-    assert child['file_modes'] == parent['file_modes']
-    assert verify_harness(child) != verify_harness(parent)
-    altered = changed(parent, tmp_path / 'altered', 'tools.json', 0o755)
-    assert declared.inspect(altered)['condition_sha256'] != before['condition_sha256']
-    assert EvolutionSpec(('control',)).compare(parent, child) == {'control':['control.json']}

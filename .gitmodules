@@ -1,4 +1,0 @@
-[submodule "PhysicalRSI_baselines/robodojo/XPolicyLab"]
-	path = PhysicalRSI_baselines/robodojo/XPolicyLab
-	url = https://github.com/PhysicalRSI/XPolicyLab.git
-	shallow = true

@@ -1,1 +1,1 @@
-"""Evidence-driven research scenarios for physicalRSI."""
+"""Durable research records and review heartbeat for PhysicalRSI."""

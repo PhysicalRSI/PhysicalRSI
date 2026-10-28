@@ -1,36 +1,24 @@
 """Minimal physicalRSI command line entry point."""
 
 import argparse
-import os
 from pathlib import Path
 
 
 def main(argv=None):
     import sys
     arguments = list(sys.argv[1:] if argv is None else argv)
-    if arguments[:1] == ['auto-engineering']:
-        from PhysicalRSI_demos.auto_engineering.__main__ import main as lab_main
-        return lab_main(arguments[1:])
     parser = argparse.ArgumentParser(
         prog="physicalrsi", description="physicalRSI · composable embodied intelligence"
     )
     parser.add_argument("--workspace", type=Path, default=Path(".physicalrsi"))
     parser.add_argument("--plain", action="store_true", help="Plain terminal text")
     parser.add_argument("--version", action="version", version="PhysicalRSI 0.2.0")
-    parser.add_argument("--port", type=int, help="Local preview port")
-    parser.add_argument("action", nargs="?", choices=["preview", "doctor"])
-    parser.add_argument("section", nargs="?", choices=["piano", "dexjoco", "baseline"], default="piano")
     parser.add_argument(
         "--command",
         action="append",
         help="Run a slash command; repeat for multiple commands",
     )
     args = parser.parse_args(argv)
-    if args.port is not None:os.environ['PHYSICALRSI_SHOWCASE_PORT']=str(args.port)
-    if args.action:
-        if args.command:parser.error('Use an action or --command, not both')
-        args.command=['/doctor' if args.action=='doctor' else
-                      ('/baselines' if args.section=='baseline' else '/demo '+args.section)]
     from PhysicalRSI.application import Application
 
     from .terminal import run_console

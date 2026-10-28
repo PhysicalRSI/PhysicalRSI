@@ -51,14 +51,8 @@ class Conversation:
                         " Select an explicit RSI plan with /rsi-plan or /scheme: hybrid compares "
                         "learned skills before code-policy development, learned_skill keeps the "
                         "best learned skill_choice, and code_policy develops the code skill. Use /harness "
-                        "design or /harness import for a data-only custom harness. Use /baseline "
-                        "for one checked task run and report its scope honestly."
-                        " Preview the supplied recordings with /demo piano and /demo dexjoco. "
-                        " /robodojo describes the pinned XPolicyLab baseline. For Dexjoco, "
-                        "use /layouts N first, inspect /jobs or /logs until it completes, "
-                        "then /collect N and finally /train STEPS. /cycle N runs the configured "
-                        "continual pi05 workflow. Job startup is not completion. /cycle status "
-                        "and /cycle pause inspect or request a stop after the current round."
+                        "design or /harness import for a data-only custom harness. Keep task adapters, "
+                        "observations and qualification scope explicit."
                     ),
                 )
             )

@@ -57,7 +57,7 @@ def test_unregistered_skill_cannot_create_a_binding():
 
 def test_portable_binding_resolves_after_registry_move(tmp_path):
     parent, child = make_skill(0), make_skill(1)
-    source = SkillRegistry(tmp_path / "source", registry_id="robodyna.skills")
+    source = SkillRegistry(tmp_path / "source", registry_id="portable.skills")
     parent_key, child_key = source.register(parent), source.register(child)
     parent_bound = source.load(parent_key, implementation=parent)
     child_bound = source.load(child_key, implementation=child)
@@ -76,5 +76,5 @@ def test_portable_binding_resolves_after_registry_move(tmp_path):
         amount = record["descriptor"]["metadata"]["amount"]
         return make_skill(amount)
 
-    moved = SkillRegistry(tmp_path / "moved", registry_id="robodyna.skills", resolver=resolve)
+    moved = SkillRegistry(tmp_path / "moved", registry_id="portable.skills", resolver=resolve)
     assert moved.load_binding(candidate["skill_bindings"][1]).execute(2) == 3

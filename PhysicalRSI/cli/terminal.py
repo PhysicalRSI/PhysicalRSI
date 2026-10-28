@@ -15,13 +15,6 @@ def render(console, result):
     if isinstance(result, str):
         console.print(Text(result))
         return
-    if (
-        isinstance(result, dict)
-        and "recipe" in result
-        and result.get("scope") == "local software example"
-    ):
-        console.print("Local example loaded · memory → tool → skill", style="#4dbaac")
-        return
     if isinstance(result, dict) and "steps" in result:
         console.print(
             Text(
@@ -76,8 +69,8 @@ def banner(console, workspace, *, plain=False):
         console.print(Text(logo.rstrip(), style="#4dbaac"))
     body = Text("Composable embodied intelligence\n", style="dim")
     body.append(str(workspace) + "\n\n", style="dim")
-    body.append("/demo piano  /demo dexjoco  /robodojo  /help", style="#4dbaac")
-    body.append("\n/layouts → /collect → /train · /cycle · /experiment", style="#4dbaac")
+    body.append("/harness  /task  /rsi  /help", style="#4dbaac")
+    body.append("\n/skills  /compose  /run  /status", style="#4dbaac")
     body.append("\n/model config.json · configure conversation", style="dim")
     console.print(Panel(body, title=title, title_align="left", border_style="#4dbaac"))
 

@@ -1,22 +1,11 @@
-"""One command registry for dispatch, help and completion."""
+"""Command registry for the interactive PhysicalRSI core CLI."""
 
 import json
 import shlex
 
+
 COMMANDS = {
     "help": "Show commands",
-    "doctor": "Check installation, bundled media and optional runtime configuration",
-    "demos": "List demonstration recordings",
-    "experiment": "[run-id] Run a verified CPU experiment or inspect a completed receipt",
-    "layouts": "[count [seed]] Generate and save fresh Dexjoco layouts",
-    "collect": "[episodes] Synthesize Dexjoco demonstrations from saved layouts",
-    "train": "[steps] Fine-tune SmolVLA on the latest successful collection",
-    "cycle": "[rounds | status | pause] Continue the configured pi05 improvement loop",
-    "jobs": "List workbench jobs and process outcomes",
-    "logs": "[job-id] Inspect job output",
-    "robodojo": "[task] Inspect the pinned baseline or run its configured evaluation",
-    "demo": "Load a local Memory → Tool → Skill example",
-    "skill-memory": "Show core policy skills, exploration skill and task memory skill_choices",
     "skills": "List registered skills",
     "tools": "List registered tools",
     "memory": "List pinned memory sources",
@@ -24,22 +13,18 @@ COMMANDS = {
     "save": "<path>  Save the exact recipe",
     "load": "<path>  Load a recipe against registered versions",
     "run": "[JSON input]  Execute the current composition",
-    "evolve": "Run the local Self-Harness example",
+    "evolve": "Run one Self-Harness iteration for the active task",
     "status": "Show recipe, workspace and resources",
-    "eval-status": "Show RoboDojo evaluation heartbeat, issues and rerun plan",
     "exit": "Exit",
     "model": "[config.json] Configure conversation API, or show configuration",
-    "rsi-plan": "[show | set JSON] Select hybrid, learned_skill or code_policy and persist the plan",
+    "rsi-plan": "[show | set JSON] Select an RSI scheme and persist the plan",
     "scheme": "<hybrid | learned_skill | code_policy>  Select an RSI search scheme",
-    "harness": "[show | design JSON | import path.json] Configure a data-only custom harness",
-    "baselines": "Open the baseline video workbench",
-    "baseline": "[JSON input] Preflight and run the active task once",
-    "play": "[JSON input] Play the active piano task and return its playback page",
+    "harness": "[show | design JSON | import path.json] Configure a data-only harness",
     "chat": "<message> Talk to the configured model",
     "reset-chat": "Clear the current model conversation",
     "task": "<package.json> Load an installed environment/RSI task package",
-    "draft": "[show | start <package.json> | set <JSON object> | apply] Prepare task configuration; set recursively updates existing fields, apply loads without running",
-    "check": "Check the active task's environment, models and experiment inputs",
+    "draft": "[show | start <package.json> | set <JSON object> | apply] Prepare task configuration",
+    "check": "Check the active task's environment and experiment inputs",
     "rsi": "Run one Self-Harness iteration for the active task",
 }
 
@@ -53,18 +38,7 @@ def dispatch(application, line):
     command, _, tail = text[1:].partition(" ")
     if command not in COMMANDS:
         raise ValueError(f"Unknown command /{command}; use /help")
-    if command in {'doctor','demos','experiment','layouts','collect','train','cycle','jobs','logs','robodojo'}:
-        from .workflows import dispatch_workflow
-        return dispatch_workflow(application, command, tail)
-    if command == "baselines" or (command == "demo" and tail.strip()):
-        from PhysicalRSI_demos.showcase.launch import open_workbench
-        section = "baseline" if command == "baselines" else tail.strip()
-        if command == "baselines" and tail.strip():
-            raise ValueError("/baselines takes no arguments")
-        if section not in {"baseline", "piano", "dexjoco"}:
-            raise ValueError("Use /demo piano, /demo dexjoco, or /baselines")
-        return open_workbench(application.workspace, section)
-    if command in {"help", "demo", "skill-memory", "skills", "tools", "memory", "evolve", "status", "eval-status", "exit"} and tail.strip():
+    if command in {"help", "skills", "tools", "memory", "evolve", "status", "exit"} and tail.strip():
         raise ValueError(f"/{command} takes no arguments")
     if command == "exit":
         raise EOFError
@@ -109,20 +83,10 @@ def dispatch(application, line):
             if len(args) == 1:
                 return application.harness("import", args[0])
         raise ValueError("Use /harness show, design JSON, or import path.json")
-    if command in {"baseline", "play"}:
-        if tail.strip():
-            value = json.loads(tail)
-        else:
-            value = None
-        return application.run_baseline(value)
     if command in {"check", "rsi"}:
         if tail.strip():
             raise ValueError(f"/{command} takes no arguments")
-        return (
-            application.check_task()
-            if command == "check"
-            else application.evolve()
-        )
+        return application.check_task() if command == "check" else application.evolve()
     if command == "help":
         return {"/" + key: value for key, value in COMMANDS.items()}
     if command == "chat":
@@ -139,14 +103,8 @@ def dispatch(application, line):
             raise ValueError("/reset-chat takes no arguments")
         application.conversation = None
         return {"conversation": "cleared"}
-    if command == "demo":
-        return application.demo()
-    if command == "skill-memory":
-        return application.skill_memory_demo()
     if command == "status":
         return application.status()
-    if command == "eval-status":
-        return application.evaluation_status()
     if command == "evolve":
         return application.evolve()
     if command in {"memory", "tools", "skills"}:

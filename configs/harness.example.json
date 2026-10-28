@@ -1,9 +1,0 @@
-{
-  "schema": "physicalrsi.harness/v1",
-  "name": "quickstart-harness",
-  "definition": {
-    "name": "quickstart-harness",
-    "success_signal": "success",
-    "max_episodes": 1
-  }
-}

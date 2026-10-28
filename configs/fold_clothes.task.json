@@ -1,9 +1,0 @@
-{
-  "schema": "physicalrsi.task/v1",
-  "name": "fold-clothes-baseline",
-  "entrypoint": "examples.fold_clothes.demo_task:create",
-  "configuration": {
-    "garment": "shirt",
-    "variant": "standard"
-  }
-}

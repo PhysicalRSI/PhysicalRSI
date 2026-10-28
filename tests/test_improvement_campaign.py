@@ -14,7 +14,7 @@ from PhysicalRSI_core.self_harness import SelfHarness, selection
 from PhysicalRSI_core.self_harness.artifacts import CLOSURE, verify_harness
 from PhysicalRSI_core.self_harness.campaign import ImprovementCampaign
 from PhysicalRSI_core.self_harness.evaluation import ExperimentEvaluator
-from PhysicalRSI_demos.experiment import CounterEnvironment, CounterPolicy, CounterVerifier
+from core_fixture import CounterEnvironment, CounterPolicy, CounterVerifier
 
 
 def manifest(root, name, **metadata):

@@ -58,11 +58,8 @@ def main(argv=None):
 
     parser = argparse.ArgumentParser(description="physicalRSI MCP stdio server")
     parser.add_argument("--workspace", type=Path, default=Path(".physicalrsi"))
-    parser.add_argument("--demo", action="store_true")
     args = parser.parse_args(argv)
     application = Application(args.workspace)
-    if args.demo:
-        application.demo()
     asyncio.run(serve(application.tools()))
     return 0
 

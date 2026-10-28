@@ -5,8 +5,8 @@
 The `./physicalrsi` launcher is the public entry point. The most useful checks are:
 
 ```bash
-./physicalrsi --plain --workspace /tmp/physicalrsi-check --command '/demo'
-./physicalrsi --plain --workspace /tmp/physicalrsi-skill-check --command '/skill-memory'
+./physicalrsi --help
+./physicalrsi --plain --workspace /tmp/physicalrsi-check --command '/help'
 python -m pytest -q
 ```
 
@@ -14,21 +14,20 @@ Use a temporary workspace for new experiments. Do not commit generated workspace
 
 ## Project shape
 
-- `PhysicalRSI/` contains the CLI, application, task loading, and conversation behavior.
+- `PhysicalRSI/` contains the compatibility CLI, application, task loading, and conversation behavior.
 - `PhysicalRSI_core/` contains contracts, storage, isolation, trajectory evidence, Self-Harness, and lineage.
-- `PhysicalRSI_demos/` contains deliberately small CPU demos, including the skill-memory and piano adapters.
-- `PhysicalRSI_baselines/` contains external-provider adapters and the reviewed primitive code-policy example.
-- `configs/` contains task and model descriptors.
-- `docs/` explains architecture, scope, and integration boundaries.
+- `PhysicalRSI_Autoresearch/` contains durable research records and the review heartbeat.
+- `src/physicalrsi/` contains the stable, task-independent public API and CLI façade.
+- `docs/` contains the small set of core architecture and persistence notes.
 - `tests/` contains release smoke checks.
 
 ## Keep the boundaries clear
 
-The repository has two user-facing workflows: demo and baseline. A software baseline may be ready and reproducible while still having no simulator or physical qualification. Preserve the scope and qualification fields in returned JSON when changing task adapters.
+The repository has one user-facing workflow: configure a task adapter, compose skills, and let System 2 evolve the declared surface. Preserve scope and qualification fields in returned JSON when changing task adapters.
 
 System 1 is the runtime path that reads observations, task state, skills, tools, and memory. System 2 proposes changes, evaluates candidates, selects a survivor, and records lineage. Keep those responsibilities visible in code and documentation.
 
-A skill route is not a model checkpoint. `pi05`, `pi05-sparse-memory`, and `code-policy` may point to external providers or local reviewed code. Do not imply that weights, training, or physical execution are included when they are provider-owned.
+A skill route is not a model checkpoint. A route identifies a composable capability and its executable provider; weights, training, and physical execution remain outside the core unless an adapter explicitly supplies them.
 
 Memory snapshots are immutable and content-addressed. New observations or lessons should create a new revision rather than silently changing an old one. Lineage records the parent, candidate, evidence, and selected revision so a result can be inspected later.
 
@@ -67,7 +66,7 @@ retrying; it is not evidence that a remote job is running. See
 Run the smallest relevant check, then the full smoke suite when shared CLI or contract code changed:
 
 ```bash
-python -m compileall -q -x '/XPolicyLab/' PhysicalRSI PhysicalRSI_core PhysicalRSI_demos PhysicalRSI_baselines
+python -m compileall -q PhysicalRSI PhysicalRSI_core PhysicalRSI_Autoresearch src
 python -m pytest -q
 ```
 

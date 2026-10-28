@@ -1,4 +1,4 @@
-"""Short-baseline image tracking without simulator identity or object state."""
+"""Short-horizon image tracking without simulator identity or object state."""
 import math
 from PhysicalRSI_core.infra.storage import digest
 from physicalrsi.runtime.sensors import decode_rgb, validate_observation
