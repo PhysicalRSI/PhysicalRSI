@@ -134,14 +134,17 @@ def test_record_marker_is_rechecked_after_its_evidence(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('dependency', ['artifacts', 'owned_files'])
-def test_archive_identity_binds_its_reading_dependencies(tmp_path, monkeypatch, dependency):
+def test_historical_archive_reading_does_not_bind_reader_source(tmp_path, monkeypatch, dependency):
     archive, revisions, _ = archive_fixture(tmp_path)
     view = read_json(archive.root / 'entries' / revisions[-1] / 'evidence/archive-view.json')
+    summaries = archive.summaries(view)
+    record = archive.read(revisions[-1])
     source = Path(getattr(module, dependency).__file__)
     real_digest = module.file_digest
     monkeypatch.setattr(module, 'file_digest', lambda path: '0' * 64 if path == source else real_digest(path))
-    with pytest.raises(ValueError, match='Invalid or changed archive view'):
-        archive.summaries(view)
+    assert archive.identity() != view['archive']
+    assert archive.summaries(view) == summaries
+    assert archive.read(revisions[-1]) == record
 
 
 def test_fork_audits_each_entry_once_without_reusing_checks_in_later_calls(tmp_path, monkeypatch):
@@ -215,11 +218,11 @@ def test_batch_validates_every_receipt_even_when_its_entry_is_shared(tmp_path, d
     path = directories[0] / 'archive.json'
     value = read_json(path)
     if damage == 'identity':
-        value['archive']['implementation'] = '0' * 64
+        value['archive']['schema'] = 'unknown-archive-format'
     else:
         value['revision'] = revisions[-1]
     atomic_json(path, value)
-    with pytest.raises(ValueError, match='implementation changed|another round'):
+    with pytest.raises(ValueError, match='reference changed|another round'):
         module.verify_archive_receipts(reversed(directories))
 
 

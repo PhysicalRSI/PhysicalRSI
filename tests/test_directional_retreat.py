@@ -23,8 +23,8 @@ def test_restart_requires_provider_and_configuration_has_distinct_revision(tmp_p
         restarted.load(revision).execute(value)
     assert restarted.load(revision, implementation=skill).execute(value) == dict(waypoint_m=[0., 0., -.15])
     assert directional_retreat(distance_m=.2).revision != skill.revision
-    with pytest.raises(ValueError):
-        restarted.load(revision, implementation=directional_retreat(distance_m=.2))
+    assert restarted.load(revision, implementation=directional_retreat(distance_m=.2)).execute(value) == dict(
+        waypoint_m=[0., 0., -.2])
 
 
 @pytest.mark.parametrize('direction', [[0, 0, 0], [1, 2], [True, 0, 1], [float('nan'), 0, 1]])

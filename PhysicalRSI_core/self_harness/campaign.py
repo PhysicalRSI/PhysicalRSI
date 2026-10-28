@@ -12,6 +12,7 @@ from ..infra.storage import atomic_json, file_digest, locked, read_json
 from ..infra.trial_quota import TrialLimitExceeded
 from ..lineage import StateConflict
 from .artifacts import verify_harness
+from .compatibility import ENGINE_VERSION, same_execution
 
 
 def _manifest(directory):
@@ -48,15 +49,17 @@ class ImprovementCampaign:
         statistics = first.config["profile"].get("statistics")
         if statistics and self.max_rounds * first.config["max_candidates"] > statistics["max_comparisons"]:
             raise ValueError("Campaign exceeds preregistered statistical comparison budget")
-        config = dict(schema="physicalrsi.campaign/v1", max_rounds=self.max_rounds,
+        config = dict(schema="physicalrsi.campaign/v1", engine_version=ENGINE_VERSION,
+                      max_rounds=self.max_rounds,
                       initial_sha256=verify_harness(initial), state_root=str(self.state.root),
                       policy=first.config, implementation=file_digest(Path(__file__)))
         current = self.state.initialize(initial, policy=first.config, scope=first.config["scope"])
         path = self.root / "campaign.json"
         if path.exists():
             ledger = read_json(path)
-            if ledger["config"] != config:
+            if not same_execution(ledger["config"], config):
                 raise ValueError("Frozen campaign configuration changed")
+            config = ledger["config"]
         else:
             ledger = dict(config=config, anchor_revision=current["revision"], rounds=[])
             atomic_json(path, ledger)

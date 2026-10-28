@@ -5,6 +5,7 @@ Reused branches must pass fresh admission and paired validation against the
 current incumbent. Local POSIX storage assumes cooperating, trusted adapters.
 """
 from copy import deepcopy
+from dataclasses import replace
 from hashlib import sha256
 import json
 import os
@@ -19,6 +20,8 @@ from . import artifacts
 from .artifacts import EvolutionSpec, HarnessSnapshots, _HarnessReadAudit, verify_harness
 from .bindings import policy_identity, validate_admission
 from .protocol import _sha
+from .population import PopulationRecord
+from .compatibility import same_archive
 
 
 def _physical(root, name):
@@ -84,9 +87,12 @@ class CandidateArchive:
         self.root = Path(root).resolve()
         self.snapshots = HarnessSnapshots(self.root / "harnesses")
 
+    def reference(self):
+        return dict(schema="physicalrsi.candidate-archive/v1", root=str(self.root))
+
     def identity(self):
         from ..experiments import runtime_implementation
-        return dict(schema="physicalrsi.candidate-archive/v1", root=str(self.root),
+        return dict(**self.reference(),
                     implementation=file_digest(Path(__file__)),
                     dependencies=dict(artifacts=file_digest(Path(artifacts.__file__)),
                                       owned_files=file_digest(Path(owned_files.__file__)),
@@ -128,6 +134,9 @@ class CandidateArchive:
             return value["output"]
 
         config, anchor = document("config.json"), document("parent.json")
+        population = None
+        if (directory / "population.json").exists():
+            population = PopulationRecord.from_dict(document("population.json"))
         view = document("archive-view.json") if (directory / "archive-view.json").exists() else None
         policy = config.get("campaign_policy", config)
         if view is not None:
@@ -151,6 +160,17 @@ class CandidateArchive:
         hashes = {h["id"]: verify_harness(h) for h in pool}
         if len(hashes) != len(pool) or len(set(hashes.values())) != len(pool):
             raise ValueError("Archive candidate pool has duplicate identities")
+        if population is not None:
+            expected_population = PopulationRecord.from_candidates(
+                round_id=directory.name,
+                generation=population.generation,
+                scope=config["scope"],
+                parent=pool[0],
+                children=children,
+            )
+            expected_population = replace(expected_population, implementation=population.implementation)
+            if expected_population.as_dict() != population.as_dict():
+                raise ValueError("Archived population differs from its candidate pool")
         evolution = EvolutionSpec.from_identity(config["evolution"])
         for child in children:
             evolution.compare(pool[0], child)
@@ -239,8 +259,11 @@ class CandidateArchive:
         body = dict(schema="physicalrsi.archive-round/v1", source_round=str(directory),
                     policy=policy, policy_sha256=digest(policy), scope=config["scope"],
                     parent_revision=anchor["revision"], result_revision=committed["revision"],
-                    outcome=outcome, candidates=candidates, comparison=comparison, cohort=cohort,
-                    results=results, decision=decision, files=files, qualification=None)
+                    outcome=outcome, candidates=candidates, comparison=comparison,
+                    cohort=cohort, results=results, decision=decision, files=files,
+                    qualification=None)
+        if population is not None:
+            body["population"] = population.as_dict()
         revision = digest(body)
         with locked(self.root / ".archive.lock"):
             entries = self.root / "entries"
@@ -310,6 +333,8 @@ class CandidateArchive:
         value = json.loads(payload)
         if digest(value) != revision or value.get("schema") != "physicalrsi.archive-round/v1":
             raise ValueError("Archived record changed")
+        if value.get("population") is not None:
+            PopulationRecord.from_dict(value["population"])
         for row in value["candidates"].values():
             if (Path(row["harness"]["root"]) != self.snapshots.root / row["freeze_sha256"]
                     or harnesses.verify(row["harness"]) != row["freeze_sha256"]):
@@ -354,7 +379,7 @@ class CandidateArchive:
                     policy_sha256=policy_sha256, revisions=revisions)
 
     def _validate_view(self, view):
-        if (view.get("schema") != "physicalrsi.archive-view/v1" or view["archive"] != self.identity()
+        if (view.get("schema") != "physicalrsi.archive-view/v1" or not same_archive(view["archive"], self.reference())
                 or view["revisions"] != sorted(set(view["revisions"]))):
             raise ValueError("Invalid or changed archive view")
         if not isinstance(view["scope"], str) or not view["scope"]:
@@ -519,8 +544,8 @@ def verify_archive_receipts(directories):
             continue
         receipt = read_json(path)
         archive = CandidateArchive(receipt["archive"]["root"])
-        if archive.identity() != receipt["archive"]:
-            raise ValueError("Candidate archive implementation changed")
+        if not same_archive(receipt["archive"], archive.reference()):
+            raise ValueError("Candidate archive reference changed")
         if archive.root not in groups:
             groups[archive.root] = (archive, [])
         groups[archive.root][1].append((directory, _sha(receipt["revision"])))

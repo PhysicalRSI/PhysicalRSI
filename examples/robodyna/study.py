@@ -4,6 +4,7 @@ import json
 import shutil
 from pathlib import Path
 from physicalrsi import SkillRegistry, compose_sequence
+from physicalrsi.skills import attach_skill_mutation
 from physicalrsi.environments import RobodynaFixture
 from physicalrsi.research import ResearchWorkflow
 from physicalrsi.reporting import ReportBundle
@@ -20,6 +21,7 @@ from PhysicalRSI_core.self_harness.artifacts import CLOSURE, EvolutionSpec, veri
 from PhysicalRSI_core.self_harness.evaluation import ExperimentEvaluator, freeze_json
 from PhysicalRSI_core.self_harness.protocol import CaseProtocol, PreregisteredSuite
 from PhysicalRSI_core.self_harness.research_memory import ResearchMemory
+from PhysicalRSI_core.self_harness.skill_mutation import SkillMutation
 from .skills import estimate_motion, move_to_target, predict_intercept
 
 
@@ -43,9 +45,15 @@ def manifest(root, name, **metadata):
 
 
 class Policy:
-    def __init__(self, candidate):
+    def __init__(self, candidate, registry=None):
         self.revision = verify_harness(candidate)
-        self.skill = composition(read_json(Path(candidate['root'])/'PredictIntercept.json')['gain'])
+        gain = read_json(Path(candidate['root'])/'PredictIntercept.json')['gain']
+        bindings = candidate.get('skill_bindings', [])
+        child = next((row for row in bindings if row.get('role') == 'child'), None)
+        predictor = (registry.load_binding(child) if child is not None and registry is not None
+                     else predict_intercept(gain=gain))
+        self.skill = compose_sequence('intercept', estimate_motion(), predictor, move_to_target(),
+            ontology_revision='constant-velocity/v1', embodiment_profile='software-point/v1')
     def identity(self):
         return dict(identity('composed-policy'), revision=self.revision, skill=self.skill.revision)
     def begin_episode(self, task, case, observation, context):
@@ -67,24 +75,29 @@ class Verifier:
 
 
 class Suite:
+    def __init__(self, registry=None):
+        self.registry = registry
     def identity(self):
         return identity('interception-suite')
     def admit(self, candidate):
         verify_harness(candidate)
         gain = read_json(Path(candidate['root'])/'PredictIntercept.json')['gain']
         composition(gain)
+        if candidate.get('skill_bindings') and self.registry is not None:
+            child = next(row for row in candidate['skill_bindings'] if row['role'] == 'child')
+            self.registry.load_binding(child)
         return dict(accepted=True, evidence=dict(composition=composition(gain).composition.revision))
     def environment(self, task):
         return RobodynaFixture()
     def policy(self, candidate, task):
-        return Policy(candidate)
+        return Policy(candidate, self.registry)
     def verifier(self, task):
         return Verifier()
 
 
 class Proposer:
-    def __init__(self, evaluator, gain):
-        self.evaluator, self.gain = evaluator, gain
+    def __init__(self, evaluator, gain, registry):
+        self.evaluator, self.gain, self.registry = evaluator, gain, registry
     def identity(self):
         return dict(identity('bounded-skill-parameter-proposer'), gain=self.gain)
     def develop(self, parent, output):
@@ -94,11 +107,24 @@ class Proposer:
         root = output/'candidate'
         shutil.copytree(parent['root'], root)
         atomic_json(root/'PredictIntercept.json', dict(gain=self.gain))
-        return [manifest(root, 'candidate', parent_sha256=verify_harness(parent),
+        parent_gain = read_json(Path(parent['root'])/'PredictIntercept.json')['gain']
+        parent_predictor = predict_intercept(gain=parent_gain)
+        child_predictor = predict_intercept(gain=self.gain)
+        parent_key = self.registry.register(parent_predictor)
+        child_key = self.registry.register(child_predictor)
+        parent_binding = self.registry.load(parent_key, implementation=parent_predictor)
+        child_binding = self.registry.load(child_key, implementation=child_predictor)
+        mutation = SkillMutation.from_primitives(
+            parent_predictor.descriptor, child_predictor.descriptor,
+            operator='skill.replace', hypothesis='Velocity extrapolation reduces observed intercept error',
+            expected_effect='Higher paired success')
+        candidate = manifest(root, 'candidate', parent_sha256=verify_harness(parent),
             method='bounded-PredictIntercept-parameter', changes=dict(skills=['PredictIntercept']),
             environment='software-contract-fixture', evidence=feedback['evidence'], costs=dict(proposals=1),
             used_lessons=[], hypothesis='Velocity extrapolation reduces observed intercept error',
-            expected_effect='Higher paired success', required_checks=['paired-success'])]
+            expected_effect='Higher paired success', required_checks=['paired-success'])
+        return [attach_skill_mutation(candidate, mutation,
+            parent_skill=parent_binding, child_skill=child_binding)]
 
 
 class Selector:
@@ -115,7 +141,7 @@ class Reflector:
         return dict(schema='physicalrsi.memory-delta/v1', operations=[])
 
 
-def setup(root, incumbent_gain=0.0, candidate_gain=1.0):
+def setup(root, incumbent_gain=0.0, candidate_gain=1.0, *, registry=None):
     root = Path(root).resolve()
     freeze_json(root/'config.json', dict(incumbent_gain=incumbent_gain, candidate_gain=candidate_gain,
                                        implementation=identity('fixture-study')))
@@ -134,6 +160,7 @@ def setup(root, incumbent_gain=0.0, candidate_gain=1.0):
         evidence={str(root/'config.json'): file_digest(root/'config.json')})})
     state = HarnessState(root/'lineage')
     quota = TrialQuota(root/'quota', max_trials=7)
+    registry = registry or SkillRegistry(root/'registry', registry_id='robodyna.fixture.skills')
     workflow = ResearchWorkflow(composition(incumbent_gain))
 
     def build(directory, context):
@@ -143,10 +170,10 @@ def setup(root, incumbent_gain=0.0, candidate_gain=1.0):
             development={'fixture': [case(0., 1.)]},
             validation={'fixture': [case(2., 2.), case(-2., -1.)]},
             test={'fixture': [case(7., -3.)]}), identity_keys=('position','velocity','horizon'))
-        evaluator = ExperimentEvaluator(suite=PreregisteredSuite(Suite(), plan),
+        evaluator = ExperimentEvaluator(suite=PreregisteredSuite(Suite(registry), plan),
             budgets={'fixture': Budget(1, 30)}, scope='software-contract-fixture',
             system2=Revision('skill-parameter-experiment','1'), quota=quota)
-        return SelfHarness(directory, state=state, proposer=Proposer(evaluator, candidate_gain),
+        return SelfHarness(directory, state=state, proposer=Proposer(evaluator, candidate_gain, registry),
             evaluator=evaluator, selector=Selector(), scope='software-contract-fixture',
             evolution=EvolutionSpec(mutable=('skills',)), max_candidates=1, round_context=context,
             profile=dict(tasks={'fixture': dict(weight=1, episodes=2, score_range=[0,1], maximum_regression=0)},
@@ -166,8 +193,8 @@ def run(root, *, incumbent_gain=0.0, candidate_gain=1.0):
 
 
 def _run(root, incumbent_gain, candidate_gain):
-    campaign, parent, workflow, quota = setup(root, incumbent_gain, candidate_gain)
-    registry = SkillRegistry(root/'registry')
+    registry = SkillRegistry(root/'registry', registry_id='robodyna.fixture.skills')
+    campaign, parent, workflow, quota = setup(root, incumbent_gain, candidate_gain, registry=registry)
     for gain in (incumbent_gain, candidate_gain):
         for skill in [estimate_motion(), predict_intercept(gain=gain), move_to_target(), composition(gain)]:
             registry.register(skill)

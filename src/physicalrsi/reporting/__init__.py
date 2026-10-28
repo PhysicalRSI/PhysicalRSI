@@ -1,3 +1,4 @@
 from .bundle import ReportBundle
+from .archive import CoreArchive
 
-__all__ = ["ReportBundle"]
+__all__ = ["CoreArchive", "ReportBundle"]

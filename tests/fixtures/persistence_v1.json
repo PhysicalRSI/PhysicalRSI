@@ -1,0 +1,109 @@
+{
+  "source": "405c256bf91f35729f3c9d322b7eaba6c7e5800f",
+  "primitive": {
+    "key": "77ca5875c903db2b7fed15852749290d7f743ea81220e4369e2530e3055c7547",
+    "record": {
+      "schema": "physicalrsi.skill/v1",
+      "id": "increment",
+      "revision": "r1",
+      "input": {
+        "name": "number"
+      },
+      "output": {
+        "name": "number"
+      },
+      "effects": [],
+      "metadata": null
+    }
+  },
+  "composition": {
+    "key": "aad38ae69fbff11cdd9ab4651c65dd26657d751e67dd1305c567f7e63bf17e68",
+    "record": {
+      "schema": "physicalrsi.skill/v1",
+      "id": "twice",
+      "revision": "9544e554724c1a4aefebec0fce6ebc33e84780cfe7dcd83146ab017f7abace61",
+      "input": {
+        "name": "number",
+        "unit": "",
+        "frame": "",
+        "embodiment": ""
+      },
+      "output": {
+        "name": "number",
+        "unit": "",
+        "frame": "",
+        "embodiment": ""
+      },
+      "effects": [],
+      "metadata": {
+        "adapter": "PhysicalRSI_core.contracts.Operation"
+      }
+    },
+    "graph": {
+      "schema": "physicalrsi.skill-composition/v1",
+      "id": "twice",
+      "ontology_revision": "unspecified",
+      "embodiment_profile": "unspecified",
+      "entry": "step-0",
+      "exit": "step-1",
+      "nodes": [
+        {
+          "id": "step-0",
+          "kind": "primitive",
+          "skill": "increment",
+          "revision": "r1",
+          "input": {
+            "name": "number",
+            "unit": "",
+            "frame": "",
+            "embodiment": ""
+          },
+          "output": {
+            "name": "number",
+            "unit": "",
+            "frame": "",
+            "embodiment": ""
+          },
+          "effects": []
+        },
+        {
+          "id": "step-1",
+          "kind": "primitive",
+          "skill": "increment",
+          "revision": "r1",
+          "input": {
+            "name": "number",
+            "unit": "",
+            "frame": "",
+            "embodiment": ""
+          },
+          "output": {
+            "name": "number",
+            "unit": "",
+            "frame": "",
+            "embodiment": ""
+          },
+          "effects": []
+        }
+      ],
+      "edges": [
+        {
+          "from": "step-0",
+          "to": "step-1",
+          "kind": "sequence"
+        }
+      ],
+      "qualification": null,
+      "revision": "41aa5b93b9f53e024c7805773862a3cbf9edc82d9bc19eb010b0a7367f0ae061"
+    }
+  },
+  "bundle": {
+    "files": {
+      "result.json": "{\"fixture\":true}\n",
+      "report.md": "# Compatibility fixture\n\nNo benchmark results.\n\nQualification: None\n",
+      "manifest.json": "{\"artifacts\":{\"report.md\":\"5c4149c8aa2020eff96c17b86029234329f80d8b2ad96f5a7f60367c65ce4c9f\",\"result.json\":\"218589323cbe80b7ed077e3ee36f1663e7cb5f8f4e4ad02c938ad8a5c2c5a6b9\"},\"qualification\":null,\"schema\":\"physicalrsi.report-bundle/v1\"}\n"
+    },
+    "title": "Compatibility fixture",
+    "summary": "No benchmark results."
+  }
+}

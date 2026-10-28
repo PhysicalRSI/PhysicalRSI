@@ -5,6 +5,7 @@ Memory, skills and tool use are all edits to the same frozen H. No second loop.
 """
 
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
@@ -21,6 +22,10 @@ from PhysicalRSI_core.infra.storage import (
 from .artifacts import EvolutionSpec, verify_harness
 from .selection import validate_profile
 from .bindings import policy_identity, validate_admission, validate_round_context
+from .population import PopulationRecord
+from .skill_mutation import SkillMutation
+from .skill_binding import validate_candidate_skills
+from .compatibility import ENGINE_VERSION, same_execution
 
 
 def now():
@@ -85,7 +90,9 @@ class SelfHarness:
             evaluator,
             selector,
         )
+        self.population_record = None
         self.config = dict(
+            engine_version=ENGINE_VERSION,
             profile=deepcopy(profile),
             protocol=deepcopy(protocol),
             scope=scope,
@@ -99,11 +106,27 @@ class SelfHarness:
             self.policy = self._campaign_policy()
             self.config.update(schema="physicalrsi.self-harness/v2",
                                campaign_policy=self.policy, round_context=self.round_context)
+        self._runtime_identities = deepcopy(self.identities())
+        self._runtime_policy = deepcopy(self._campaign_policy()) if round_context is not None else None
         with locked(self.root / ".init.lock"):
             path = self.root / "config.json"
-            if path.exists() and digest(read_json(path)) != digest(self.config):
-                raise ValueError("Frozen experiment configuration changed")
-            atomic_json(path, self.config)
+            if path.exists():
+                saved = read_json(path)
+                if not same_execution(saved, self.config):
+                    raise ValueError("Frozen experiment configuration changed")
+                self.config = saved
+                self.policy = deepcopy(saved.get("campaign_policy", saved))
+            else:
+                if (self.state.root / "current.json").exists():
+                    saved_policy = self.state.resolve()["policy"]
+                    if not same_execution(saved_policy, self.policy):
+                        raise ValueError("Frozen campaign policy changed")
+                    self.policy = deepcopy(saved_policy)
+                    if round_context is None:
+                        self.config = deepcopy(saved_policy)
+                    else:
+                        self.config["campaign_policy"] = deepcopy(saved_policy)
+                atomic_json(path, self.config)
 
     def identities(self):
         result = dict(
@@ -125,8 +148,14 @@ class SelfHarness:
             if archived["result_revision"] != current["revision"]:
                 raise ValueError("Archived round differs from the selected state")
             self._stable()
-            freeze_json(self.root / "archive.json", dict(archive=self.archive.identity(),
-                                                        revision=archived["revision"]))
+            path = self.root / "archive.json"
+            if path.exists():
+                from .archive import verify_archive_receipt
+                verify_archive_receipt(self.root)
+                if read_json(path)["revision"] != archived["revision"]:
+                    raise ValueError("Archive receipt differs from the completed round")
+            else:
+                freeze_json(path, dict(archive=self.archive.identity(), revision=archived["revision"]))
         return current
 
     def _campaign_policy(self):
@@ -136,7 +165,8 @@ class SelfHarness:
                           selector=policy_identity(self.selector),
                           bindings=file_digest(Path(__file__).with_name("bindings.py")),
                           lineage=file_digest(Path(__file__).parent.parent / "lineage" / "__init__.py"))
-        return dict(schema="physicalrsi.campaign-policy/v2", profile=deepcopy(self.config["profile"]),
+        return dict(schema="physicalrsi.campaign-policy/v2", engine_version=ENGINE_VERSION,
+                    profile=deepcopy(self.config["profile"]),
                     protocol=deepcopy(protocol), scope=self.config["scope"],
                     max_candidates=self.config["max_candidates"], identities=identities,
                     evolution=self.evolution.identity())
@@ -146,9 +176,9 @@ class SelfHarness:
             raise ValueError("Frozen experiment configuration changed")
         if digest(self.evolution.identity()) != digest(self.config["evolution"]):
             raise ValueError("Frozen evolution specification changed")
-        if digest(self.identities()) != digest(self.config["identities"]):
+        if digest(self.identities()) != digest(self._runtime_identities):
             raise ValueError("Executable port or core identity changed")
-        if self.round_context is not None and digest(self._campaign_policy()) != digest(self.policy):
+        if self.round_context is not None and digest(self._campaign_policy()) != digest(self._runtime_policy):
             raise ValueError("Campaign policy changed")
 
     def _step(self, name, inputs, call, *, recover=None):
@@ -228,6 +258,9 @@ class SelfHarness:
                 raise ValueError(
                     "Interaction completed; current state has since changed"
                 )
+            population_path = self.root / "population.json"
+            if population_path.exists():
+                self.population_record = PopulationRecord.read(population_path)
             return self._finish(value)
         archive_view = None
         if self.archive is not None:
@@ -269,6 +302,18 @@ class SelfHarness:
             or not 0 <= len(children) <= self.config["max_candidates"]
         ):
             raise ValueError("Candidate pool is malformed or exceeds declared budget")
+        population_path = self.root / "population.json"
+        if population_path.exists() or "engine_version" in self.config:
+            generation = self.round_context["index"] if self.round_context is not None else 0
+            population = PopulationRecord.from_candidates(
+                round_id=self.root.name, generation=generation, scope=self.config["scope"],
+                parent=parent, children=children,
+            )
+            if population_path.exists():
+                saved_population = PopulationRecord.read(population_path)
+                population = replace(population, implementation=saved_population.implementation)
+            population.write(population_path)
+            self.population_record = population
         if not children:
             if verify_harness(parent) != parent_sha:
                 raise ValueError("Parent changed during development")
@@ -287,6 +332,7 @@ class SelfHarness:
         if hashes[parent["id"]] != parent_sha:
             raise ValueError("Parent edited during proposal")
         for child in children:
+            validate_candidate_skills(child)
             if "archive_origin" in child:
                 if self.archive is None:
                     raise ValueError("Archived proposals require a declared archive")

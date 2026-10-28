@@ -133,6 +133,10 @@ def test_campaign_inherits_then_retains_and_resumes_without_new_effects(tmp_path
     assert [r["outcome"] for r in result["rounds"]] == ["inherited", "retained"]
     assert result["current"]["harness"]["id"] == "child"
     assert len(suite.resets) == quota.status()["reserved_trials"] == 6
+    population = read_json(campaign.root / "rounds/round-0001/population.json")
+    assert population["schema"] == "physicalrsi.population-record/v1"
+    assert population["parent"]["candidate_id"] == "parent"
+    assert population["members"][0]["candidate_id"] == "child"
     parent = campaign.state.read(result["rounds"][0]["parent_revision"])
     assert parent["harness"]["id"] == "parent"
     assert campaign.run(initial) == result

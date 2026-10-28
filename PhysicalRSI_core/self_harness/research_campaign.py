@@ -16,6 +16,7 @@ from ..lineage import StateConflict
 from .artifacts import verify_harness
 from .campaign import _manifest
 from .evaluation import freeze_json
+from .compatibility import ENGINE_VERSION, same_execution
 
 
 class Reflector(Protocol):
@@ -129,14 +130,22 @@ class ResearchCampaign:
         statistics = template.policy["profile"].get("statistics")
         if statistics and self.max_rounds * template.policy["max_candidates"] > statistics["max_comparisons"]:
             raise ValueError("Campaign exceeds preregistered statistical comparison budget")
-        config = dict(schema="physicalrsi.research-campaign/v1", policy=template.policy,
+        config = dict(schema="physicalrsi.research-campaign/v1", engine_version=ENGINE_VERSION,
+                      policy=template.policy,
                       initial_sha256=verify_harness(initial), initial_memory=self.initial_memory,
                       state_root=str(self.state.root), memory_root=str(self.memory.root.resolve()),
                       context=self.context, reflector=self.reflector_identity,
                       max_rounds=self.max_rounds, update_memory=self.update_memory,
                       implementation=file_digest(Path(__file__)),
                       memory_implementation=file_digest(Path(__file__).with_name("research_memory.py")))
-        freeze_json(self.root / "config.json", config)
+        config_path = self.root / "config.json"
+        if config_path.exists():
+            saved = read_json(config_path)
+            if not same_execution(saved, config):
+                raise ValueError("Frozen research campaign configuration changed")
+            config = saved
+        else:
+            freeze_json(config_path, config)
         current = self.state.initialize(initial, policy=template.policy, scope=template.config["scope"])
         pointer = self.root / "current.json"
         if not pointer.exists():

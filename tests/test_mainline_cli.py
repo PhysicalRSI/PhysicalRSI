@@ -3,6 +3,15 @@ import json
 from physicalrsi.cli import main
 
 
+def test_mainline_help_describes_the_core_commands(capsys):
+    assert main(["--help"]) == 0
+    output = capsys.readouterr().out
+    assert "evolve" in output
+    assert "harness" in output
+    assert "skills" in output
+    assert "compatibility surface" in output
+
+
 def test_cli_designs_and_reads_a_user_harness(tmp_path, capsys):
     definition = tmp_path / "harness-definition.json"
     definition.write_text(json.dumps({

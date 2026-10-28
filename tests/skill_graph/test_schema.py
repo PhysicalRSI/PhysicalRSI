@@ -5,7 +5,9 @@ from PhysicalRSI_core.skill_graph.schema import (
     CompositionNode,
     SCHEMA,
     SkillComposition,
+    LEGACY_SCHEMA,
 )
+from PhysicalRSI_core.infra.storage import digest
 
 
 def node(name, *, kind="primitive"):
@@ -53,3 +55,12 @@ def test_revision_tampering_is_rejected():
     value["nodes"][0]["revision"] = "changed"
     with pytest.raises(ValueError, match="revision"):
         SkillComposition.from_dict(value)
+
+
+def test_legacy_composition_records_still_load():
+    value = composition().as_dict(include_revision=False)
+    value["schema"] = LEGACY_SCHEMA
+    value["revision"] = digest(value)
+    loaded = SkillComposition.from_dict(value)
+    assert loaded.id == "pick"
+    assert loaded.as_dict() == value

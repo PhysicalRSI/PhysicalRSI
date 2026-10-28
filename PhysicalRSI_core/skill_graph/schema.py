@@ -7,13 +7,15 @@ objects later.
 """
 
 from copy import deepcopy
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, field
+import json
 from typing import Any, Mapping
 
-from ..infra.storage import digest, identifier
+from ..infra.storage import identifier
 
 
-SCHEMA = "physicalrsi.skill-composition/v1"
+LEGACY_SCHEMA = "physicalrsi.skill-composition/v1"
+SCHEMA = "physicalrsi.skill-composition/v2"
 NODE_KINDS = frozenset({"primitive", "composite", "adapter"})
 EDGE_KINDS = frozenset({"sequence"})
 
@@ -39,6 +41,8 @@ class CompositionNode:
     input: dict[str, Any]
     output: dict[str, Any]
     effects: tuple[str, ...] = ()
+    implementation: dict[str, Any] | None = None
+    composition: dict[str, Any] | None = None
 
     def __post_init__(self):
         identifier(_text(self.id, "Node id"))
@@ -48,20 +52,19 @@ class CompositionNode:
         _text(self.revision, "Node revision")
         _object(self.input, "Node input")
         _object(self.output, "Node output")
-        from ..contracts import Contract
-        Contract(**self.input)
-        Contract(**self.output)
-        object.__setattr__(self, "input", asdict(Contract(**self.input)))
-        object.__setattr__(self, "output", asdict(Contract(**self.output)))
+        object.__setattr__(self, "input", deepcopy(self.input))
+        object.__setattr__(self, "output", deepcopy(self.output))
         effects = tuple(self.effects)
         if any(not isinstance(value, str) or not value.strip() for value in effects):
             raise ValueError("Node effects must be nonempty strings")
         if len(set(effects)) != len(effects):
             raise ValueError("Node effects must be unique")
         object.__setattr__(self, "effects", tuple(sorted(effects)))
+        object.__setattr__(self, "implementation", deepcopy(self.implementation))
+        object.__setattr__(self, "composition", deepcopy(self.composition))
 
     def as_dict(self):
-        return {
+        value = {
             "id": self.id,
             "kind": self.kind,
             "skill": self.skill,
@@ -70,6 +73,13 @@ class CompositionNode:
             "output": deepcopy(self.output),
             "effects": list(self.effects),
         }
+        # Embedded declarations omit their derived revision; the enclosing
+        # graph already includes their full structure in its own revision.
+        if self.implementation is not None:
+            value["implementation"] = deepcopy(self.implementation)
+        if self.composition is not None:
+            value["composition"] = deepcopy(self.composition)
+        return value
 
 
 @dataclass(frozen=True)
@@ -106,8 +116,10 @@ class SkillComposition:
     nodes: tuple[CompositionNode, ...]
     edges: tuple[CompositionEdge, ...]
     qualification: dict[str, Any] | None = None
+    _schema: str = field(default=SCHEMA, init=False, repr=False, compare=False)
 
     def __post_init__(self):
+        object.__setattr__(self, "_schema", SCHEMA)
         identifier(_text(self.id, "Composition id"))
         _text(self.ontology_revision, "Ontology revision")
         _text(self.embodiment_profile, "Embodiment profile")
@@ -137,8 +149,6 @@ class SkillComposition:
         for edge in edges:
             if edge.source in successors or edge.target in predecessors:
                 raise ValueError("Phase 1 requires a serial graph")
-            if by_id[edge.source].output != by_id[edge.target].input:
-                raise ValueError("Incompatible composition contracts")
             successors[edge.source] = edge.target
             predecessors[edge.target] = edge.source
         visited = set()
@@ -159,7 +169,7 @@ class SkillComposition:
 
     def as_dict(self, *, include_revision=True):
         value = {
-            "schema": SCHEMA,
+            "schema": self._schema,
             "id": self.id,
             "ontology_revision": self.ontology_revision,
             "embodiment_profile": self.embodiment_profile,
@@ -170,16 +180,24 @@ class SkillComposition:
             "qualification": deepcopy(self.qualification),
         }
         if include_revision:
-            value["revision"] = digest(value)
+            value["revision"] = self.revision
         return value
 
     @property
     def revision(self):
-        return digest(self.as_dict(include_revision=False))
+        if self._schema == LEGACY_SCHEMA:
+            from ..infra.storage import digest
+            return digest(self.as_dict(include_revision=False))
+        return json.dumps(
+            self.as_dict(include_revision=False),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]):
-        if not isinstance(value, Mapping) or value.get("schema") != SCHEMA:
+        if not isinstance(value, Mapping) or value.get("schema") not in {LEGACY_SCHEMA, SCHEMA}:
             raise ValueError(f"Expected a {SCHEMA} declaration")
         required = {
             "schema", "id", "revision", "ontology_revision", "embodiment_profile",
@@ -191,9 +209,11 @@ class SkillComposition:
             raise ValueError("Composition nodes and edges must be lists")
         nodes = []
         for row in value["nodes"]:
-            if not isinstance(row, Mapping) or set(row) != {
+            required_node = {
                 "id", "kind", "skill", "revision", "input", "output", "effects"
-            }:
+            }
+            if (not isinstance(row, Mapping) or not required_node <= set(row)
+                    or set(row) - required_node - {"implementation", "composition"}):
                 raise ValueError("Composition node has unknown or missing fields")
             nodes.append(CompositionNode(**dict(row)))
         edges = []
@@ -210,7 +230,15 @@ class SkillComposition:
             exit=value["exit"], nodes=tuple(nodes), edges=tuple(edges),
             qualification=value["qualification"],
         )
-        if value["revision"] != result.revision:
+        if value.get("schema") == LEGACY_SCHEMA:
+            from ..infra.storage import digest
+            legacy = result.as_dict(include_revision=False)
+            legacy["schema"] = LEGACY_SCHEMA
+            expected = digest(legacy)
+            object.__setattr__(result, "_schema", LEGACY_SCHEMA)
+        else:
+            expected = result.revision
+        if value["revision"] != expected:
             raise ValueError("Skill composition revision differs from its content")
         return result
 

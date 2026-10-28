@@ -4,7 +4,8 @@ from examples.robodyna.skills import estimate_motion, move_to_target, predict_in
 from examples.robodyna.study import run
 from physicalrsi import SkillRegistry, compose_sequence
 from physicalrsi.reporting import ReportBundle
-from PhysicalRSI_core.infra.storage import read_json, file_digest
+from PhysicalRSI_core.infra.storage import read_json, file_digest, digest, atomic_json
+from physicalrsi import CallableSkill, SkillDescriptor
 from PhysicalRSI_Autoresearch.records import ResearchRecord
 
 OBSERVATION = dict(position=3., previous_position=1., sample_dt=1., horizon=2.)
@@ -13,17 +14,63 @@ OBSERVATION = dict(position=3., previous_position=1., sample_dt=1., horizon=2.)
 def test_composed_skill_load_after_registry_restart(tmp_path):
     skill = compose_sequence('intercept', estimate_motion(), predict_intercept(), move_to_target())
     key = SkillRegistry(tmp_path).register(skill)
+    assert key.startswith('record-')
+    stored = read_json(tmp_path/'skills'/(key+'.json'))
+    assert stored['schema'] == 'physicalrsi.skill-record/v2'
+    assert stored['composition'] == skill.composition_identity()
+    assert stored['implementation'] == skill.executable_identity()
     reopened = SkillRegistry(tmp_path)
     with pytest.raises(RuntimeError, match='trusted implementation'):
         reopened.load(key).execute(OBSERVATION)
-    assert reopened.load(key, implementation=skill).execute(OBSERVATION) == {'target_position':7.}
+    loaded = reopened.load(key, implementation=skill)
+    assert loaded.execute(OBSERVATION) == {'target_position':7.}
+    assert loaded.composition_identity() == skill.composition_identity()
+    assert loaded.executable_identity() == skill.executable_identity()
     wrong = compose_sequence('intercept', estimate_motion(), predict_intercept(gain=.5), move_to_target())
-    with pytest.raises(ValueError, match='identity'):
-        reopened.load(key, implementation=wrong)
+    rebound = reopened.load(key, implementation=wrong)
+    assert rebound.execute(OBSERVATION) == {'target_position': 5.}
+    assert rebound.executable_identity() == wrong.executable_identity()
+    assert rebound.stored_record() == stored
     path = tmp_path/'skills'/(key+'.json')
     path.write_text('{}')
-    with pytest.raises(ValueError, match='changed'):
+    with pytest.raises(ValueError, match='Unknown skill schema'):
         reopened.load(key)
+
+
+def test_registry_allows_same_descriptor_with_different_executable(tmp_path):
+    descriptor = SkillDescriptor(
+        'identity-check', 'revision-1', {'name': 'input'}, {'name': 'output'})
+    first = CallableSkill(
+        descriptor, lambda value, context: value,
+        executable_identity={'schema': 'test-executable/v1', 'revision': 'first'})
+    second = CallableSkill(
+        descriptor, lambda value, context: value,
+        executable_identity={'schema': 'test-executable/v1', 'revision': 'second'})
+    key = SkillRegistry(tmp_path).register(first)
+    assert SkillRegistry(tmp_path).load(key, implementation=second).execute(3) == 3
+
+
+def test_registry_loads_legacy_descriptor_record(tmp_path):
+    skill = estimate_motion()
+    record = skill.identity()
+    key = digest(record)
+    atomic_json(tmp_path/'skills'/(key+'.json'), record)
+    loaded = SkillRegistry(tmp_path).load(key, implementation=skill)
+    assert loaded.execute(OBSERVATION) == {
+        'position': 3., 'velocity': 2., 'horizon': 2.
+    }
+
+
+def test_skill_core_forwards_raw_values_without_contract_or_context_gate():
+    descriptor = SkillDescriptor('raw-core', 'v1', {}, {})
+    seen = []
+    skill = CallableSkill(
+        descriptor,
+        lambda value, context: seen.append((value, context)) or value + 1,
+    )
+    assert skill.execute(2) == 3
+    assert seen[0][0] == 2 and hasattr(seen[0][1], 'check')
+    assert 'source_digest' not in skill.executable_identity()
 
 
 def test_study_resume_without_new_trials(tmp_path, monkeypatch):
@@ -97,3 +144,9 @@ def test_nested_compositions_reuse_core_contract_semantics():
     predictor = compose_sequence('predictor', estimate_motion(), predict_intercept())
     whole = compose_sequence('whole', predictor, move_to_target())
     assert whole.execute(OBSERVATION) == {'target_position': 7.}
+
+
+def test_composition_core_accepts_untyped_values():
+    first = CallableSkill(SkillDescriptor('first', 'v1', {}, {}), lambda value, context: value + 1)
+    second = CallableSkill(SkillDescriptor('second', 'v1', {}, {}), lambda value, context: value * 2)
+    assert compose_sequence('raw', first, second).execute(3) == 8
