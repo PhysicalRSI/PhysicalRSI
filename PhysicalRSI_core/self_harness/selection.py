@@ -7,6 +7,7 @@ separate prerequisites. No benchmark-specific names or score scales live here.
 """
 
 import math
+import random
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean
@@ -46,6 +47,146 @@ def _time(value):
     if value.tzinfo is None or value > datetime.now(timezone.utc):
         raise ValueError("Invalid event timestamp")
     return value
+
+
+def _sample_sd(values):
+    """Return the sample standard deviation, or None for fewer than two values."""
+    if len(values) < 2:
+        return None
+    center = math.fsum(values) / len(values)
+    return math.sqrt(max(0.0, math.fsum((value - center) ** 2 for value in values) / (len(values) - 1)))
+
+
+def _beta_continued_fraction(a, b, x):
+    """Evaluate the incomplete-beta continued fraction using stdlib math only."""
+    # Numerical Recipes' Lentz recurrence is stable for the parameter ranges
+    # used by the fixed-n Student t test.
+    tiny = 1e-300
+    qab = a + b
+    qap = a + 1.0
+    qam = a - 1.0
+    c = 1.0
+    d = 1.0 - qab * x / qap
+    if abs(d) < tiny:
+        d = tiny
+    d = 1.0 / d
+    value = d
+    for m in range(1, 10000):
+        m2 = 2 * m
+        numerator = m * (b - m) * x / ((qam + m2) * (a + m2))
+        d = 1.0 + numerator * d
+        if abs(d) < tiny:
+            d = tiny
+        c = 1.0 + numerator / c
+        if abs(c) < tiny:
+            c = tiny
+        d = 1.0 / d
+        value *= d * c
+        numerator = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+        d = 1.0 + numerator * d
+        if abs(d) < tiny:
+            d = tiny
+        c = 1.0 + numerator / c
+        if abs(c) < tiny:
+            c = tiny
+        d = 1.0 / d
+        delta = d * c
+        value *= delta
+        if abs(delta - 1.0) < 3e-14:
+            break
+    return value
+
+
+def _regularized_beta(a, b, x):
+    """Regularized incomplete beta I_x(a,b), with no third-party dependency."""
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    log_beta_term = (
+        math.lgamma(a + b)
+        - math.lgamma(a)
+        - math.lgamma(b)
+        + a * math.log(x)
+        + b * math.log1p(-x)
+    )
+    beta_term = math.exp(log_beta_term)
+    if x < (a + 1.0) / (a + b + 2.0):
+        return beta_term * _beta_continued_fraction(a, b, x) / a
+    return 1.0 - beta_term * _beta_continued_fraction(b, a, 1.0 - x) / b
+
+
+def _student_t_survival(t_statistic, degrees_of_freedom):
+    """One-sided Student t survival function for a finite statistic."""
+    if not math.isfinite(t_statistic) or degrees_of_freedom <= 0:
+        return 0.0 if t_statistic > 0 else 1.0
+    if t_statistic == 0.0:
+        return 0.5
+    x = degrees_of_freedom / (degrees_of_freedom + t_statistic * t_statistic)
+    tail = 0.5 * _regularized_beta(degrees_of_freedom / 2.0, 0.5, x)
+    return tail if t_statistic > 0 else 1.0 - tail
+
+
+# Acklam's rational approximation, accurate to better than 1e-9 over the
+# ordinary probability range and substantially better than the 1e-6 contract.
+_NORMAL_A = (-3.969683028665376e1, 2.209460984245205e2,
+             -2.759285104469687e2, 1.383577518672690e2,
+             -3.066479806614716e1, 2.506628277459239e0)
+_NORMAL_B = (-5.447609879822406e1, 1.615858368580409e2,
+             -1.556989798598866e2, 6.680131188771972e1,
+             -1.328068155288572e1)
+_NORMAL_C = (-7.784894002430293e-3, -3.223964580411365e-1,
+             -2.400758277161838e0, -2.549732539343734e0,
+             4.374664141464968e0, 2.938163982698783e0)
+_NORMAL_D = (7.784695709041462e-3, 3.224671290700398e-1,
+             2.445134137142996e0, 3.754408661907416e0)
+
+
+def _normal_quantile(probability):
+    """Inverse standard normal CDF using a rational approximation."""
+    if probability <= 0.0:
+        return -math.inf
+    if probability >= 1.0:
+        return math.inf
+    low = 0.02425
+    high = 1.0 - low
+    if probability < low:
+        q = math.sqrt(-2.0 * math.log(probability))
+        numerator = (((((_NORMAL_C[0] * q + _NORMAL_C[1]) * q + _NORMAL_C[2]) * q
+                       + _NORMAL_C[3]) * q + _NORMAL_C[4]) * q + _NORMAL_C[5])
+        denominator = (((( _NORMAL_D[0] * q + _NORMAL_D[1]) * q + _NORMAL_D[2]) * q
+                        + _NORMAL_D[3]) * q + 1.0)
+        return numerator / denominator
+    if probability > high:
+        q = math.sqrt(-2.0 * math.log1p(-probability))
+        numerator = (((((_NORMAL_C[0] * q + _NORMAL_C[1]) * q + _NORMAL_C[2]) * q
+                       + _NORMAL_C[3]) * q + _NORMAL_C[4]) * q + _NORMAL_C[5])
+        denominator = (((( _NORMAL_D[0] * q + _NORMAL_D[1]) * q + _NORMAL_D[2]) * q
+                        + _NORMAL_D[3]) * q + 1.0)
+        return -numerator / denominator
+    q = probability - 0.5
+    r = q * q
+    numerator = (((((_NORMAL_A[0] * r + _NORMAL_A[1]) * r + _NORMAL_A[2]) * r
+                   + _NORMAL_A[3]) * r + _NORMAL_A[4]) * r + _NORMAL_A[5]) * q
+    denominator = (((((_NORMAL_B[0] * r + _NORMAL_B[1]) * r + _NORMAL_B[2]) * r
+                     + _NORMAL_B[3]) * r + _NORMAL_B[4]) * r + 1.0)
+    return numerator / denominator
+
+
+def _normal_upper_quantile(tail_probability):
+    """Return z with P(Z >= z)=tail_probability without 1-tail rounding."""
+    if tail_probability <= 0.0:
+        return math.inf
+    if tail_probability >= 1.0:
+        return -math.inf
+    if tail_probability > 0.5:
+        return -_normal_quantile(tail_probability)
+    q = math.sqrt(-2.0 * math.log(tail_probability))
+    numerator = (((((_NORMAL_C[0] * q + _NORMAL_C[1]) * q + _NORMAL_C[2]) * q
+                   + _NORMAL_C[3]) * q + _NORMAL_C[4]) * q + _NORMAL_C[5])
+    denominator = (((( _NORMAL_D[0] * q + _NORMAL_D[1]) * q + _NORMAL_D[2]) * q
+                    + _NORMAL_D[3]) * q + 1.0)
+    return -numerator / denominator
 
 
 def comparison_identity(comparison):
@@ -101,11 +242,33 @@ def validate_profile(profile):
         )
     if "statistics" in profile:
         rule = profile["statistics"]
-        if (not isinstance(rule, dict) or set(rule) != {"method", "alpha", "max_comparisons"}
-                or rule["method"] != "paired-hoeffding"
-                or not 0 < _number(rule["alpha"]) < 1
-                or type(rule["max_comparisons"]) is not int or rule["max_comparisons"] < 1):
-            raise ValueError("Declare paired-hoeffding alpha and a bounded comparison budget")
+        methods = {"paired-hoeffding", "paired-permutation", "paired-t"}
+        if not isinstance(rule, dict):
+            raise ValueError(
+                "Declare a statistics method from paired-hoeffding, paired-permutation, paired-t"
+            )
+        method = rule.get("method")
+        if method not in methods:
+            raise ValueError(
+                "Unknown statistics method; choose paired-hoeffding, paired-permutation, or paired-t"
+            )
+        allowed = {"method", "alpha", "max_comparisons"}
+        if method == "paired-permutation":
+            allowed.add("resamples")
+        if set(rule) - allowed:
+            raise ValueError("Statistics block contains an unsupported key")
+        if (
+            not 0 < _number(rule.get("alpha")) < 1
+            or type(rule.get("max_comparisons")) is not int
+            or rule["max_comparisons"] < 1
+        ):
+            raise ValueError("Declare alpha and a bounded comparison budget")
+        if "resamples" in rule and (
+            method != "paired-permutation"
+            or type(rule["resamples"]) is not int
+            or not 200 <= rule["resamples"] <= 100000
+        ):
+            raise ValueError("Permutation resamples must be an integer from 200 through 100000")
 
 
 def validate_admission_binding(
@@ -316,12 +479,47 @@ def select_survivor(
         # Independent paired case differences lie in [-1, 1]. Weighted
         # Hoeffding plus a union bound covers the preregistered total number of
         # candidate comparisons, including adaptive rounds with fresh cases.
-        variance_bound = math.fsum((weights[task] / total_weight) ** 2 / spec["episodes"]
-                                   for task, spec in tasks.items())
-        # Form the ratio in log space: a valid small alpha can overflow the
-        # quotient even though the confidence radius is finite.
-        log_correction = math.log(statistics["max_comparisons"]) - math.log(statistics["alpha"])
-        radius = math.sqrt(2 * log_correction * variance_bound)
+        if statistics["method"] == "paired-hoeffding":
+            variance_bound = math.fsum((weights[task] / total_weight) ** 2 / spec["episodes"]
+                                       for task, spec in tasks.items())
+            # Form the ratio in log space: a valid small alpha can overflow the
+            # quotient even though the confidence radius is finite.
+            log_correction = math.log(statistics["max_comparisons"]) - math.log(statistics["alpha"])
+            radius = math.sqrt(2 * log_correction * variance_bound)
+
+    n_total = len(expected)
+    # For a case in task t, x_i = (w_t / W) * (n_total / n_t) * d_i.
+    # Therefore mean(x) = sum_t (1/n_total) * (w_t/W) * (n_total/n_t)
+    # * sum_i d_i = sum_t (w_t/W) * mean(d_t), exactly the normalized gain.
+    contribution_factor = {
+        task: (weights[task] / total_weight) * n_total / spec["episodes"]
+        for task, spec in tasks.items()
+    }
+    contributions = {
+        name: [
+            contribution_factor[pair[0]] * (paired_scores[name][pair] - paired_scores[parent][pair])
+            for pair in sorted(expected)
+        ]
+        for name in metrics
+        if name != parent
+    }
+    pooled_contributions = [value for values in contributions.values() for value in values]
+    pooled_sd = _sample_sd(pooled_contributions)
+    alpha_per_comparison = (
+        statistics["alpha"] / statistics["max_comparisons"] if statistics else None
+    )
+    cohort_power = dict(
+        n_cases=n_total,
+        pooled_sd=pooled_sd,
+        mde_80_alpha=(
+            pooled_sd
+            * (_normal_upper_quantile(alpha_per_comparison) + _normal_quantile(0.8))
+            / math.sqrt(n_total)
+            if pooled_sd is not None and alpha_per_comparison is not None
+            else None
+        ),
+        alpha_per_comparison=alpha_per_comparison,
+    )
     for name, metric in metrics.items():
         if name == parent:
             continue
@@ -339,13 +537,85 @@ def select_survivor(
         over_cost = [t + ":" + key for t, spec in tasks.items()
                      for key in sorted(spec.get("cost_limits", {}))
                      if metric["mean_cost"][t][key] > spec["cost_limits"][key]]
+        statistical_accept = True
+        statistical_p = None
         if statistics:
             differences = [paired_scores[name][pair] - paired_scores[parent][pair] for pair in sorted(expected)]
-            metric["improvement_evidence"] = dict(
-                method=statistics["method"], normalized_gain=gain, lower_bound=gain-radius,
-                alpha_per_comparison=statistics["alpha"] / statistics["max_comparisons"],
-                paired_wins=sum(d > 0 for d in differences), paired_losses=sum(d < 0 for d in differences),
-                paired_ties=sum(d == 0 for d in differences), independent_cases_required=True)
+            if statistics["method"] == "paired-hoeffding":
+                metric["improvement_evidence"] = dict(
+                    method=statistics["method"], normalized_gain=gain, lower_bound=gain-radius,
+                    alpha_per_comparison=alpha_per_comparison,
+                    paired_wins=sum(d > 0 for d in differences), paired_losses=sum(d < 0 for d in differences),
+                    paired_ties=sum(d == 0 for d in differences), independent_cases_required=True)
+            else:
+                values = contributions[name]
+                threshold = profile["minimum_gain"] + profile["tie_tolerance"]
+                centered = [value - threshold for value in values]
+                observed = math.fsum(centered) / len(centered)
+                sample_sd = _sample_sd(values)
+                if statistics["method"] == "paired-t":
+                    if sample_sd is None or sample_sd == 0.0:
+                        # A zero-variance cohort is accepted only for a strict
+                        # positive gain with at least two paired cases.
+                        standard_error = 0.0 if sample_sd == 0.0 and len(values) >= 2 else None
+                        t_statistic = math.inf if observed > 0.0 and standard_error == 0.0 else (
+                            -math.inf if observed < 0.0 and standard_error == 0.0 else None
+                        )
+                        statistical_p = 0.0 if observed > 0.0 and len(values) >= 2 else 1.0
+                        statistical_accept = observed > 0.0 and len(values) >= 2
+                    else:
+                        standard_error = sample_sd / math.sqrt(len(values))
+                        t_statistic = observed / standard_error
+                        statistical_p = _student_t_survival(t_statistic, len(values) - 1)
+                        statistical_accept = statistical_p <= alpha_per_comparison
+                    metric["improvement_evidence"] = dict(
+                        method="paired-t",
+                        normalized_gain=gain,
+                        p_value=statistical_p,
+                        alpha_per_comparison=alpha_per_comparison,
+                        n_cases=len(values),
+                        paired_wins=sum(d > 0 for d in differences),
+                        paired_losses=sum(d < 0 for d in differences),
+                        paired_ties=sum(d == 0 for d in differences),
+                        t_statistic=t_statistic,
+                        standard_error=standard_error,
+                    )
+                else:
+                    resamples = statistics.get("resamples", 2000)
+                    exact = len(centered) <= 12
+                    draws = 1 << len(centered) if exact else resamples
+                    count = 0
+                    if exact:
+                        for mask in range(draws):
+                            total = math.fsum(
+                                value if (mask >> index) & 1 else -value
+                                for index, value in enumerate(centered)
+                            )
+                            if total / len(centered) >= observed:
+                                count += 1
+                    else:
+                        generator = random.Random(int(comparison_sha[:16], 16))
+                        for _ in range(draws):
+                            total = math.fsum(
+                                value if generator.getrandbits(1) else -value
+                                for value in centered
+                            )
+                            if total / len(centered) >= observed:
+                                count += 1
+                    statistical_p = (1 + count) / (1 + draws)
+                    statistical_accept = statistical_p <= alpha_per_comparison
+                    metric["improvement_evidence"] = dict(
+                        method="paired-permutation",
+                        normalized_gain=gain,
+                        p_value=statistical_p,
+                        alpha_per_comparison=alpha_per_comparison,
+                        n_cases=len(values),
+                        paired_wins=sum(d > 0 for d in differences),
+                        paired_losses=sum(d < 0 for d in differences),
+                        paired_ties=sum(d == 0 for d in differences),
+                        resamples=resamples,
+                        exact=exact,
+                    )
         if regressed:
             rejection[name] = dict(reason="task_regression", tasks=regressed)
         elif success_regressed:
@@ -356,8 +626,11 @@ def select_survivor(
             rejection[name] = dict(
                 reason="no_sufficient_improvement", normalized_gain=gain
             )
-        elif statistics and gain - radius <= profile["minimum_gain"] + profile["tie_tolerance"]:
+        elif statistics and statistics["method"] == "paired-hoeffding" and gain - radius <= profile["minimum_gain"] + profile["tie_tolerance"]:
             rejection[name] = dict(reason="insufficient_evidence", lower_bound=gain-radius, normalized_gain=gain)
+        elif statistics and statistics["method"] in {"paired-t", "paired-permutation"} and not statistical_accept:
+            rejection[name] = dict(reason="insufficient_evidence", normalized_gain=gain,
+                                    p_value=statistical_p)
         else:
             eligible.append(name)
     winner = parent
@@ -379,6 +652,7 @@ def select_survivor(
         metrics=metrics,
         rejected=rejection,
         result_sha256={r["candidate_id"]: digest(r) for r in results},
+        cohort_power=cohort_power,
         scope=comparison.get(
             "scope",
             "paired evidence integrity only; no automatic physical qualification",

@@ -97,7 +97,11 @@ It is data that a user can design or import.
 
 **Darwinian Self-Harness.** System 2 develops the incumbent, proposes one or
 more candidates, admits them, evaluates them on a frozen comparison, selects a
-survivor, and records the parent, candidates, evidence, and outcome.
+survivor, and records the parent, candidates, evidence, and outcome. Fixed-n
+selection supports paired-hoeffding, paired-permutation, and paired-t;
+paired-permutation is recommended for cohorts under 40 cases, while paired-t
+fits larger cohorts. The reported `cohort_power.mde_80_alpha` is the gain that
+the cohort can detect with 80 percent power at its comparison-adjusted alpha.
 
 **A durable RSI loop.** A research campaign continues from the selected
 survivor. Development evidence can produce a `SkillMutation`; the candidate
@@ -188,7 +192,34 @@ registry = SkillRegistry(
     registry_id="my-agent.skills",
     resolver=resolve,
 )
+
+# Structural contracts are checked at composition time.
+from physicalrsi import Contract, adapt
+
+camera = CallableSkill(
+    SkillDescriptor("camera", "camera-v1",
+                    Contract("camera-request"),
+                    Contract("rgb", shape=(480, 640, 3), dtype="uint8", rate_hz=30)),
+    lambda value, context: value["frame"],
+)
+detector = CallableSkill(
+    SkillDescriptor("detector", "detector-v1",
+                    Contract("normalized-rgb", shape=(None, None, 3), dtype="float32"),
+                    Contract("detections")),
+    lambda value, context: {"boxes": []},
+)
+# compose_sequence(camera, detector) raises CompositionTypeError: the camera
+# produces uint8 "rgb" and the detector consumes float32 "normalized-rgb".
+to_float = adapt(
+    "to_float", camera.descriptor.output, detector.descriptor.input,
+    lambda value, context: value / 255.0,
+)
+policy_skill = compose_sequence("typed-policy", camera, to_float, detector)
 ```
+
+Structural fields include shape, dtype and nominal rate. `compose_sequence`
+rejects incompatible adjacent steps by default; insert an explicit `adapt(...)`
+skill when a conversion is required.
 
 When System 2 changes a primitive or composition, the candidate records the
 mutation and the parent/child executable bindings. The existing selection and
