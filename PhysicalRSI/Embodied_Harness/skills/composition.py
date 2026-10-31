@@ -2,17 +2,24 @@
 
 from dataclasses import asdict
 
-from PhysicalRSI_core.contracts import Contract, Operation
+from PhysicalRSI_core.contracts import Contract, Operation, contract_payload
 from PhysicalRSI_core.infra.executor import Executor
 from PhysicalRSI_core.infra.storage import digest
 
 
 def identity(operation: Operation) -> dict:
+    def payload(contract):
+        value = contract_payload(contract)
+        if value["shape"] is None and value["dtype"] == "" and value["rate_hz"] is None:
+            value.pop("shape")
+            value.pop("dtype")
+            value.pop("rate_hz")
+        return value
     return dict(
         name=operation.name,
         revision=operation.revision,
-        input=asdict(operation.input),
-        output=asdict(operation.output),
+        input=payload(operation.input),
+        output=payload(operation.output),
         effects=sorted(operation.effects),
     )
 

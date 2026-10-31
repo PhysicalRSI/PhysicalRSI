@@ -5,8 +5,10 @@ This lowercase package exposes stable, task-independent building blocks and
 adapters to the existing Core and Autoresearch implementations.
 """
 
-from .skills.protocol import CallableSkill, SkillDescriptor
+from PhysicalRSI_core.contracts import Contract
+from .skills.protocol import CallableSkill, SkillDescriptor, CompositionTypeError
 from .skills.registry import SkillRegistry
-from .skills.compose import compose_sequence
+from .skills.compose import compose_sequence, adapt, check_composition
 
-__all__ = ["CallableSkill", "SkillDescriptor", "SkillRegistry", "compose_sequence"]
+__all__ = ["Contract", "CallableSkill", "SkillDescriptor", "SkillRegistry",
+           "compose_sequence", "adapt", "CompositionTypeError", "check_composition"]

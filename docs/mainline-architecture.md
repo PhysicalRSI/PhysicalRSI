@@ -10,9 +10,9 @@ the mainline supplies the contracts those adapters implement.
    observation, capability and action objects. `SkillDescriptor` records the
    domain, codomain, effects and revision. `compose_sequence` is the first
    serial composition operator, and `SkillComposition` makes the resulting
-   graph inspectable and content-addressed. Future parallel composition is the
-   monoidal product of independent skills; adapters are explicit morphisms
-   between sensor or embodiment contracts.
+   graph inspectable and content-addressed. Serial composition is type-checked;
+   adapters are explicit morphisms between sensor or embodiment contracts.
+   Parallel and feedback composition are not yet implemented.
 2. **Harness management.** A harness freezes the mutable search surface,
    fixed components, evaluation protocol, evidence roots and resource budget.
    `PhysicalRSI_core.self_harness` owns admission, selection, lineage,

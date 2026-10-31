@@ -12,7 +12,7 @@ import json
 from types import CodeType, FunctionType, MethodType, ModuleType
 from typing import Any, Callable
 
-from PhysicalRSI_core.contracts import Operation
+from PhysicalRSI_core.contracts import Operation, contract_from, contract_payload
 
 
 SCHEMA = "physicalrsi.skill/v1"
@@ -36,6 +36,15 @@ class SkillDescriptor:
     metadata: dict[str, Any] | None = None
 
     def __post_init__(self):
+        for field_name in ("input", "output"):
+            value = getattr(self, field_name)
+            # Preserve pre-v2 descriptor payloads byte-for-byte. New Contract
+            # instances and any structural fields always use the canonical form.
+            if isinstance(value, dict) and (not value or set(value) <= {"name", "unit", "frame", "embodiment"}):
+                canonical = dict(value)
+            else:
+                canonical = contract_payload(contract_from(value))
+            object.__setattr__(self, field_name, canonical)
         object.__setattr__(self, "effects", tuple(self.effects))
 
     def as_dict(self):
@@ -48,6 +57,10 @@ class SkillDescriptor:
             "effects": list(self.effects),
             "metadata": deepcopy(self.metadata),
         }
+
+
+class CompositionTypeError(ValueError):
+    """Adjacent skill contracts are incompatible for composition."""
 
 
 class CallableSkill:
@@ -139,11 +152,18 @@ class CallableSkill:
 
     @classmethod
     def from_operation(cls, operation, *, composition=None):
+        def operation_contract(value):
+            payload = contract_payload(value)
+            if payload["shape"] is None and payload["dtype"] == "" and payload["rate_hz"] is None:
+                payload.pop("shape")
+                payload.pop("dtype")
+                payload.pop("rate_hz")
+            return payload
         descriptor = SkillDescriptor(
             id=operation.name,
             revision=operation.revision,
-            input=asdict(operation.input),
-            output=asdict(operation.output),
+            input=operation_contract(operation.input),
+            output=operation_contract(operation.output),
             effects=tuple(sorted(operation.effects)),
             metadata={"adapter": "PhysicalRSI_core.contracts.Operation"},
         )
