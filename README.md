@@ -103,6 +103,14 @@ paired-permutation is recommended for cohorts under 40 cases, while paired-t
 fits larger cohorts. The reported `cohort_power.mde_80_alpha` is the gain that
 the cohort can detect with 80 percent power at its comparison-adjusted alpha.
 
+The language proposer is a data-only System 2 route: a model may suggest JSON
+number changes only for fields declared in the `ParameterSpace`. Bounds,
+precision, duplicates, and parent equality are validated before a candidate is
+materialized, while each prompt, response, and validation decision is retained
+as hashed evidence. Model text is never executed as code. The HTTP adapter uses
+`ModelConfig` and reads its credential from `PHYSICALRSI_API_KEY` (or the
+configured environment variable).
+
 **A durable RSI loop.** A research campaign continues from the selected
 survivor. Development evidence can produce a `SkillMutation`; the candidate
 also carries the executable skill bindings needed by the evaluator. Completed

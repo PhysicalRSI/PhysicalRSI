@@ -22,6 +22,10 @@ the mainline supplies the contracts those adapters implement.
    parent/candidate/evidence lineage. Research memory is append-only and
    counterexamples suspend recommendations instead of silently overwriting
    them.
+   The language proposer is a data-only JSON mutation route over declared
+   `ParameterSpace` fields. It validates bounded numeric edits, records prompt,
+   response, and validation evidence, and never executes model-generated code.
+   Its HTTP client uses `ModelConfig` and `PHYSICALRSI_API_KEY`.
 4. **RSI agent loop.** System 1 executes observations, tools and skills. System
    2 reflects on development evidence, mutates the declared search surface and
    resumes from durable records. `ResearchWorkflow` binds a composition to the
