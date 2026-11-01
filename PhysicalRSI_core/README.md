@@ -49,11 +49,22 @@ A task adapter should provide:
 ## Trial runtime
 
 The runtime records policy verdicts as `success` or `failure`. A policy that
-uses its declared wall budget is recorded as `deadline`, which is a policy
-failure for scoring. A trial that could not be run faithfully is recorded as
-`infrastructure-fault`: examples include an evidence/filesystem error, a lost
-robot link, or a sensor timeout. Host stalls are separated from policy time by
-the runtime timing record. Infrastructure faults close their journals and
+uses its declared budget is recorded as `deadline`, which is a policy failure
+for scoring. The budget charges time spent inside policy and environment port
+calls, including reset, step and quiescence calls; environment time counts
+because a policy can make a simulator or physical interaction slow through its
+chosen contacts and actions. Runtime bookkeeping (journal writes, evidence and
+blob publication, and `fsync`) is measured separately and does not consume
+that budget. The timing receipt's `phase_seconds` reports `policy`,
+`environment`, and `bookkeeping` seconds (the latter includes verifier and
+runtime work outside those two port categories).
+
+A whole-trial safety ceiling protects the host from an unbounded bookkeeping
+stall. It defaults to ten times the declared budget and can be changed with
+`ExperimentRuntime(..., safety_ceiling_multiple=...)`; crossing it is an
+`infrastructure-fault`, even if the policy/environment allowance was also
+exhausted. Other examples include an evidence/filesystem error, a lost robot
+link, or a sensor timeout. Infrastructure faults close their journals and
 fault evidence before the evaluator retries the same case and pairing slot
 (two retries by default). Exhausted retries make the paired case unavailable
 for both arms and reduce the cohort's paired sample size; they never become a

@@ -56,7 +56,7 @@ def test_policy_deadline_is_failure_and_cancellation_still_raises(tmp_path):
         run(runtime, "cancelled", policy=CancellingPolicy())
 
 
-def test_host_stall_outside_policy_is_infrastructure_fault(tmp_path, monkeypatch):
+def test_host_stall_outside_policy_budget_is_bookkeeping(tmp_path, monkeypatch):
     import PhysicalRSI_core.experiments as experiments
 
     original = experiments.atomic_json
@@ -68,8 +68,65 @@ def test_host_stall_outside_policy_is_infrastructure_fault(tmp_path, monkeypatch
 
     monkeypatch.setattr(experiments, "atomic_json", stalled)
     receipt = run(ExperimentRuntime(tmp_path / "trials"), "stall", budget=Budget(1, 0.005))
-    assert receipt["outcome"] == "infrastructure-fault"
+    assert receipt["outcome"] == "success"
     assert receipt["timing"]["call_seconds"]["policy"] < 0.005
+    assert receipt["timing"]["phase_seconds"]["bookkeeping"] > 0.02
+
+
+def test_safety_ceiling_turns_an_unbounded_bookkeeping_stall_into_fault(tmp_path, monkeypatch):
+    import PhysicalRSI_core.experiments as experiments
+
+    original = experiments.atomic_json
+
+    def stalled(path, value):
+        if Path(path).name == "verdict.json":
+            time.sleep(0.06)
+        return original(path, value)
+
+    monkeypatch.setattr(experiments, "atomic_json", stalled)
+    runtime = ExperimentRuntime(tmp_path / "trials", safety_ceiling_multiple=2)
+    receipt = run(runtime, "ceiling", budget=Budget(1, 0.02))
+    assert receipt["outcome"] == "infrastructure-fault"
+    assert receipt["timing"]["phase_seconds"]["bookkeeping"] > 0.05
+    assert runtime.read_evidence("ceiling")["fault"]["reason"] == "Trial safety ceiling exceeded"
+
+
+def test_bookkeeping_stall_preserves_paired_selection_and_statistics(tmp_path, monkeypatch):
+    import PhysicalRSI_core.experiments as experiments
+
+    def campaign_result(root, *, slow):
+        campaign, parent, suite, quota = setup(root, max_trials=20, max_rounds=1,
+                                                budget_seconds=0.005)
+        if slow:
+            original = experiments.atomic_json
+            stalled = {"value": False}
+
+            def write(path, value):
+                if (not stalled["value"] and Path(path).name == "verdict.json"
+                        and "validation" in Path(path).parts):
+                    stalled["value"] = True
+                    time.sleep(0.03)
+                return original(path, value)
+
+            with monkeypatch.context() as patch:
+                patch.setattr(experiments, "atomic_json", write)
+                result = campaign.run(parent)
+            assert stalled["value"]
+        else:
+            result = campaign.run(parent)
+        selection = read_json(campaign.root / "rounds/round-0001/selection.json")["output"]
+        return result, selection
+
+    _, baseline = campaign_result(tmp_path / "baseline", slow=False)
+    _, slowed = campaign_result(tmp_path / "slowed", slow=True)
+    fields = ("cohort_cases", "cohort_power", "decision", "evaluated_cases", "metrics",
+              "rejected", "survivor_id")
+    assert {field: slowed[field] for field in fields} == {field: baseline[field] for field in fields}
+    trial_root = tmp_path / "slowed/campaign/rounds/round-0001/experiments/validation/parent/trials"
+    receipts = list(trial_root.glob("*/receipt.json"))
+    assert len(receipts) == 2
+    assert any(read_json(path)["timing"]["phase_seconds"]["bookkeeping"] > 0.02
+               for path in receipts)
 
 
 def test_exhausted_pair_is_dropped_from_paired_statistics(tmp_path):

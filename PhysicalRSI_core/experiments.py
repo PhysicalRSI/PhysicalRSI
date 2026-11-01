@@ -327,12 +327,19 @@ class ExperimentRuntime:
     executing revision. Completed runs read verified evidence without device
     calls. Uncertain runs require reconciliation, even after device recovery.
     """
-    def __init__(self, root, *, device_registry=None, durability="intent"):
+    def __init__(self, root, *, device_registry=None, durability="intent",
+                 safety_ceiling_multiple=10.0):
         if durability not in _DURABILITY_POLICIES:
             raise ValueError("durability must be intent, step or final")
+        import math
+        if (isinstance(safety_ceiling_multiple, bool)
+                or not math.isfinite(safety_ceiling_multiple)
+                or safety_ceiling_multiple <= 0):
+            raise ValueError("safety_ceiling_multiple must be finite and positive")
         self.root = Path(root).resolve()
         self.device_registry = device_registry
         self.durability = durability
+        self.safety_ceiling_multiple = float(safety_ceiling_multiple)
 
     def require_unstarted(self, run_id, *, replacement=None):
         """A missing receipt is not proof that an earlier execution never began."""
@@ -566,6 +573,7 @@ class ExperimentRuntime:
             artifact_contract="files/v1" if export_evidence is not None else None,
             system2=asdict(system2) if system2 else None,
             durability=self.durability,
+            safety_ceiling_multiple=self.safety_ceiling_multiple,
             device_registry=self.device_registry.identity() if resources else None))
         if policy_evidence is not None:
             specification["policy_evidence_contract"] = "json/v1"
@@ -622,35 +630,62 @@ class ExperimentRuntime:
         atomic_json(folder / "receipt.json", receipt)
         start = monotonic()
         phase, phase_start = "preparation", start
-        phase_seconds = dict.fromkeys(("preparation", "reset", "rollout", "verification", "finalization", "cleanup"), 0.)
         call_seconds = dict.fromkeys(("policy", "environment", "verifier"), 0.)
+        safety_deadline = start + budget.seconds * self.safety_ceiling_multiple
 
         def enter_phase(name):
             nonlocal phase, phase_start
             current = monotonic()
-            phase_seconds[phase] += current - phase_start
             phase, phase_start = name, current
 
         def record_timing():
             enter_phase(phase)
+            elapsed = phase_start - start
+            policy_seconds = call_seconds["policy"]
+            environment_seconds = call_seconds["environment"]
             receipt["timing"] = dict(schema="physicalrsi.trial-timing/v1",
-                                     phase_seconds=dict(phase_seconds),
+                                     phase_seconds=dict(
+                                         policy=policy_seconds,
+                                         environment=environment_seconds,
+                                         bookkeeping=max(0., elapsed - policy_seconds - environment_seconds)),
                                      call_seconds=dict(call_seconds),
-                                     non_call_seconds=max(0., (phase_start - start)
-                                                           - sum(call_seconds.values())))
-            receipt["elapsed_seconds"] = phase_start - start
+                                     non_call_seconds=max(0., elapsed - sum(call_seconds.values())))
+            receipt["elapsed_seconds"] = elapsed
+
+        def accounted_seconds():
+            """Return time charged to the policy/environment trial budget."""
+            return call_seconds["policy"] + call_seconds["environment"]
+
+        def refresh_deadline():
+            """Move the cooperative budget deadline past host bookkeeping.
+
+            Ports see a fixed deadline during each call, so time spent in a
+            policy or environment call remains charged to the budget. Between
+            calls, runtime bookkeeping is added back to the deadline. The
+            absolute safety deadline is never extended.
+            """
+            elapsed = monotonic() - start
+            bookkeeping = max(0., elapsed - accounted_seconds())
+            object.__setattr__(context, "deadline", min(
+                safety_deadline, start + budget.seconds + bookkeeping))
 
         def invoke(kind, method, *args, **kwargs):
             """Measure time spent in a port separately from host/runtime time."""
+            refresh_deadline()
             began = monotonic()
             try:
                 return method(*args, **kwargs)
             finally:
                 call_seconds[kind] += monotonic() - began
+                refresh_deadline()
+
+        def check_context():
+            refresh_deadline()
+            context.check()
 
         blob_store = blobs.BlobStore(folder / "blobs", fsync=self.durability in {"step", "final"})
         blob_store.ensure_root()
-        context = Context(run_id, deadline=start + budget.seconds,
+        context = Context(run_id, deadline=min(start + budget.seconds, safety_deadline),
                           harness_revision=binding.system1.revision if binding else "",
                           blobs=blob_store)
         case = specification["case"]
@@ -702,7 +737,7 @@ class ExperimentRuntime:
 
         try:
             stable()
-            context.check()
+            check_context()
             enter_phase('reset')
             receipt['execution_phase'] = 'reset'
             atomic_json(folder / 'receipt.json', receipt)
@@ -714,7 +749,7 @@ class ExperimentRuntime:
             enter_phase('rollout')
             receipt['execution_phase'] = 'episode'
             atomic_json(folder / 'receipt.json', receipt)
-            context.check()
+            check_context()
             if type(initial.get("ready")) is not bool:
                 raise ValueError("Reset must declare readiness")
             if not initial["ready"]:
@@ -735,18 +770,18 @@ class ExperimentRuntime:
                     # Retain initial policy evidence before the first
                     # environment action, including when that action is lost.
                     record_policy_evidence()
-                    context.check()
+                    check_context()
                 termination = "environment" if initial.get("terminated", False) else "step_budget"
                 if termination != "environment":
                     action_journal = _AppendJournal(folder / "actions.jsonl")
                     journals.append(action_journal)
                 for step in range(0 if termination == "environment" else budget.max_steps):
                     stable()
-                    context.check()
+                    check_context()
                     policy_started = True
                     action = _json(invoke("policy", policy.act,
                                           deepcopy(trace[-1]["observation"]), context))
-                    context.check()
+                    check_context()
                     stable()
                     # Persist the intended effect before entering the environment.
                     pending = dict(step=step, action=action, state="dispatched")
@@ -762,7 +797,7 @@ class ExperimentRuntime:
                     trajectory_journal.append(trace[-1], fsync=journal_fsync("trajectory"))
                     action_journal.append(dict(pending, state="observed"),
                                            fsync=journal_fsync("actions", "observed"))
-                    context.check()
+                    check_context()
                     if result["terminated"]:
                         termination = "environment"
                         break
@@ -771,7 +806,7 @@ class ExperimentRuntime:
                 enter_phase("verification")
                 verdict = _json(invoke("verifier", _verify_call, verifier,
                                        deepcopy(case), deepcopy(trace), context))
-                context.check()
+                check_context()
                 if verdict.get("outcome") not in {"success", "failure", "uncertain"}:
                     raise ValueError("Verifier must return success, failure or uncertain")
                 if not verdict.get("reason") or not isinstance(verdict.get("measurements"), dict):
@@ -779,20 +814,20 @@ class ExperimentRuntime:
             enter_phase("finalization")
             stop_policy()
             if claim:
-                context.check()
+                check_context()
                 quiet = _json(invoke("environment", environment.quiesce, context))
                 atomic_json(folder / "quiescence.json", quiet)
                 if quiet.get("quiescent") is not True:
                     raise ReconciliationRequired("Environment did not confirm device quiescence")
-                context.check()
+                check_context()
             stable()
             if specification["artifact_contract"]:
                 evidence_names.update(trial_artifacts.capture(folder, environment.export_evidence()))
-                context.check()
+                check_context()
                 stable()
             if specification.get("policy_evidence_contract"):
                 record_policy_evidence()
-                context.check()
+                check_context()
                 stable()
             close_journals()
             atomic_json(folder / "trajectory.json", trace)
@@ -800,7 +835,7 @@ class ExperimentRuntime:
             # Evidence publication can stall independently of the policy.  A
             # final cooperative check turns that overrun into the same
             # infrastructure-fault path as a mid-rollout host pause.
-            context.check()
+            check_context()
             referenced, blob_paths = _blob_evidence(
                 folder, blob_store,
                 [initial, trace, verdict,
@@ -817,21 +852,21 @@ class ExperimentRuntime:
                            evidence={name: file_digest(folder / name) for name in sorted(evidence_names)})
             record_timing()
             atomic_json(folder / "receipt.json", receipt)
-            context.check()
+            check_context()
             return self.read(run_id)
         except BaseException as error:
-            # A deadline raised after a host-side pause is an infrastructure
-            # fault.  A deadline reached while the policy itself consumed the
-            # budget remains a policy failure.  Explicit cancellation always
-            # follows the existing reconciliation path.
+            # Policy and environment calls share the declared budget. Runtime
+            # bookkeeping is charged only to the absolute safety ceiling. An
+            # explicit cancellation still follows the reconciliation path.
+            now = monotonic()
+            safety_expired = (not context.cancelled.is_set() and now >= safety_deadline)
             deadline_expired = (isinstance(error, Cancelled)
                                 and not context.cancelled.is_set()
                                 and context.deadline is not None
-                                and monotonic() >= context.deadline)
-            infrastructure = _infrastructure_error(error) or (
-                deadline_expired and call_seconds["policy"] < budget.seconds
-            )
-            if infrastructure or (deadline_expired and call_seconds["policy"] >= budget.seconds):
+                                and now >= context.deadline)
+            budget_expired = accounted_seconds() >= budget.seconds
+            infrastructure = _infrastructure_error(error) or safety_expired
+            if infrastructure or (deadline_expired and budget_expired):
                 enter_phase("cleanup")
                 close_journals()
                 try:
@@ -840,9 +875,12 @@ class ExperimentRuntime:
                     receipt["policy_cleanup_error"] = type(cleanup_error).__name__
                 record_timing()
                 if infrastructure:
-                    reason = ("Host stall exceeded the trial budget outside policy calls"
-                              if deadline_expired and not _infrastructure_error(error)
-                              else str(error) or type(error).__name__)
+                    if safety_expired:
+                        reason = "Trial safety ceiling exceeded"
+                    elif deadline_expired and not _infrastructure_error(error):
+                        reason = "Policy and environment budget exceeded"
+                    else:
+                        reason = str(error) or type(error).__name__
                     fault = dict(schema="physicalrsi.infrastructure-fault/v1",
                                  outcome="infrastructure-fault", reason=reason,
                                  exception_type=type(error).__name__,
@@ -858,9 +896,10 @@ class ExperimentRuntime:
                                              for name in sorted({"experiment.json", "fault.json"})})
                     atomic_json(folder / "receipt.json", receipt)
                     return self.read(run_id)
-                # The policy consumed its allowance.  Preserve a normal,
-                # scorable receipt so selection treats it as a failure.
-                verdict = dict(outcome="deadline", reason="Policy budget exceeded",
+                # Policy/environment calls consumed their allowance. Preserve
+                # a normal, scorable receipt so selection treats it as a
+                # failure.
+                verdict = dict(outcome="deadline", reason="Policy and environment budget exceeded",
                                measurements={})
                 atomic_json(folder / "trajectory.json", trace)
                 atomic_json(folder / "verdict.json", verdict)

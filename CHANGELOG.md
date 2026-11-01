@@ -7,6 +7,8 @@
   exhausted pair from both arms' statistics.
 - Record host-versus-port timing and document retry behavior for physical
   links and sensors.
+- Charge policy and environment calls to the trial budget while measuring
+  bookkeeping separately, with a configurable whole-trial safety ceiling.
 
 ## 0.3.0
 

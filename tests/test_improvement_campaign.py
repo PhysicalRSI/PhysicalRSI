@@ -100,7 +100,8 @@ class Selector:
         return selection.select_survivor(*args, **kwargs)
 
 
-def setup(tmp_path, *, max_trials=6, max_rounds=2, score_measurement=None, with_archive=False):
+def setup(tmp_path, *, max_trials=6, max_rounds=2, score_measurement=None, with_archive=False,
+          budget_seconds=30):
     seed = tmp_path / "seed"
     for kind in CLOSURE:
         atomic_json(seed / (kind + ".json"), dict(increment=2) if kind == "control" else dict(kind=kind))
@@ -108,7 +109,7 @@ def setup(tmp_path, *, max_trials=6, max_rounds=2, score_measurement=None, with_
     state = HarnessState(tmp_path / "state")
     suite = Suite()
     quota = TrialQuota(tmp_path / "quota", max_trials=max_trials)
-    evaluator = ExperimentEvaluator(suite=suite, budgets={"counter": Budget(10, 30)},
+    evaluator = ExperimentEvaluator(suite=suite, budgets={"counter": Budget(10, budget_seconds)},
                                     scope="software", system2=Revision("test-repair", "1"), quota=quota,
                                     score_measurement=score_measurement)
     from PhysicalRSI_core.self_harness.archive import CandidateArchive

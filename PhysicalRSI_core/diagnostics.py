@@ -37,8 +37,9 @@ def profile_trials(sources):
         if 'timing' in receipt:
             if (not isinstance(timing, dict) or timing.get('schema') != 'physicalrsi.trial-timing/v1'
                     or not isinstance(timing.get('phase_seconds'), dict)
-                    or set(timing['phase_seconds']) != {
-                        'preparation', 'reset', 'rollout', 'verification', 'finalization', 'cleanup'}):
+                    or set(timing['phase_seconds']) not in ({
+                        'preparation', 'reset', 'rollout', 'verification', 'finalization', 'cleanup'}, {
+                        'policy', 'environment', 'bookkeeping'})):
                 raise ValueError('Unknown or incomplete Trial timing breakdown')
             phases = {name: finite_seconds(seconds, positive=False)
                       for name, seconds in timing['phase_seconds'].items()}
