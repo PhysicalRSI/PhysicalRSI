@@ -131,6 +131,12 @@ lineage.
 
 ## Define a skill
 
+Skills follow the principles and review checklist in
+[docs/skill-design.md](docs/skill-design.md): typed contracts, small composed
+primitives, public inputs only, no task-geometry shortcuts, closed-loop
+verification, declared parameters and tools, and sensor data as blob references.
+
+
 A primitive skill is an ordinary Python callable with a small descriptor:
 
 ```python
@@ -161,6 +167,17 @@ provide. For a sensor-only policy, use the runtime sensor boundary and pass
 RGB, RGB-D, proprioception, force, or contact measurements through the
 environment adapter. The verifier may use richer environment state to measure
 the outcome, but that state is not automatically visible to the skill.
+
+### Sensor data
+
+Large sensor values can be stored as content-addressed blob references. An
+adapter writes arrays or images to the trial's `blobs/` store and places the
+small reference, including media type, shape, dtype, and byte count, in its
+observation. Policies and verifiers receive those references and can read them
+through `context.blobs.get_array(ref)`; policy code must not write to the
+store. The trajectory stays compact, while final receipts record and hash
+every referenced blob so the sensor evidence remains byte-verifiable. Blobs
+that were written but never referenced are reported and retained for inspection.
 
 ## Compose and register skills
 
