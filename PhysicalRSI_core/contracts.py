@@ -120,6 +120,9 @@ class Context:
     # A controller can attach a cooperative ownership/liveness check. It is
     # transient execution context, never part of a frozen harness artifact.
     validity: Callable[[], None] | None = field(default=None, compare=False, repr=False)
+    # Per-trial content addressed sensor access.  This is transient execution
+    # context and is intentionally excluded from equality and representation.
+    blobs: Any | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self):
         from PhysicalRSI_core.infra.storage import identifier

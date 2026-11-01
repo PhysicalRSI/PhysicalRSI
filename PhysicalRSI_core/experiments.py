@@ -5,6 +5,7 @@ an adapter must honor Context.check() and bound its own device/network calls.
 Device ownership and trial receipts survive interruption without automatic retry.
 """
 import json
+import inspect
 import os
 import secrets
 from contextlib import nullcontext
@@ -16,7 +17,7 @@ from typing import Protocol
 
 from .contracts import Context, ReconciliationRequired
 from .embodiment import Embodiment, ExecutionBinding, System1, System2Trial
-from .infra import devices, evidence, storage, trial_artifacts
+from .infra import blobs, devices, evidence, storage, trial_artifacts
 from .infra.storage import atomic_json, digest, file_digest, identifier, locked, read_json
 
 
@@ -110,6 +111,51 @@ def _json(value):
     return json.loads(storage.canonical(value))
 
 
+def _blob_refs(value):
+    """Return unique validated references in first-seen order."""
+    result = []
+    seen = set()
+    for ref in blobs.refs(value):
+        key = ref["$blob"]
+        if key not in seen:
+            seen.add(key)
+            result.append(ref)
+    return result
+
+
+def _blob_evidence(folder, store, values):
+    references = []
+    seen = set()
+    for value in values:
+        for ref in _blob_refs(value):
+            if ref["$blob"] not in seen:
+                store.verify_ref(ref)
+                seen.add(ref["$blob"])
+                references.append(ref)
+    paths = {}
+    for ref in references:
+        path = store.path(ref)
+        relative = str(path.relative_to(folder))
+        paths[relative] = ref["$blob"]
+    return references, paths
+
+
+def _verify_call(verifier, case, trace, context):
+    """Call legacy two-argument verifiers and blob-aware three-argument ones."""
+    method = verifier.verify
+    try:
+        parameters = list(inspect.signature(method).parameters.values())
+        accepts_context = any(parameter.kind == inspect.Parameter.VAR_POSITIONAL
+                              for parameter in parameters) or len(parameters) >= 3
+    except (TypeError, ValueError):
+        accepts_context = False
+    if accepts_context:
+        if len(parameters) >= 3 and parameters[2].kind == inspect.Parameter.KEYWORD_ONLY:
+            return method(case, trace, context=context)
+        return method(case, trace, context)
+    return method(case, trace)
+
+
 @dataclass(frozen=True)
 class Budget:
     max_steps: int = 100
@@ -168,8 +214,8 @@ class System1Policy(Policy, Protocol):
 
 class Verifier(Protocol):
     def identity(self) -> dict: ...
-    def verify(self, case: dict, trace: list[dict]) -> dict:
-        """Return outcome (success/failure/uncertain), reason and measurements."""
+    def verify(self, case: dict, trace: list[dict], context: Context | None = None) -> dict:
+        """Return outcome, reason and measurements; context enables blob reads."""
         ...
 
 
@@ -243,6 +289,7 @@ def runtime_implementation():
     return {name: _source_digest(root / path) for name, path in {
         "runtime": "experiments.py", "contracts": "contracts.py", "trials": "trials.py",
         "trial_artifacts": "infra/trial_artifacts.py", "evidence": "infra/evidence.py",
+        "blobs": "infra/blobs.py",
         "embodiment": "embodiment.py", "timing": "timing.py",
         "devices": "infra/devices.py", "storage": "infra/storage.py",
         "trial_recovery": "infra/trial_recovery.py", "trial_quota": "infra/trial_quota.py",
@@ -362,6 +409,27 @@ class ExperimentRuntime:
             from .infra.trial_recovery import audit_bundle
             recovery, recovery_files = audit_bundle(reader, run_id, specification)
             required.update(recovery_files)
+        # Read the JSON documents before checking the manifest so referenced
+        # blob paths can become part of the same evidence closure.
+        reset_document = reader.document("reset.json", receipt["evidence"].get("reset.json"))
+        trajectory_document = reader.document("trajectory.json", receipt["evidence"].get("trajectory.json"))
+        blob_store = blobs.BlobStore(folder / "blobs", fsync=False)
+        referenced = _blob_refs(reset_document) + _blob_refs(trajectory_document)
+        if "verdict.json" in receipt["evidence"]:
+            referenced.extend(_blob_refs(reader.document("verdict.json", receipt["evidence"].get("verdict.json"))))
+        if "policy-evidence.json" in receipt["evidence"]:
+            referenced.extend(_blob_refs(reader.document("policy-evidence.json", receipt["evidence"].get("policy-evidence.json"))))
+        unique_referenced = []
+        seen_referenced = set()
+        for ref in referenced:
+            if ref["$blob"] not in seen_referenced:
+                seen_referenced.add(ref["$blob"])
+                unique_referenced.append(ref)
+        blob_paths = {}
+        for ref in unique_referenced:
+            blob_store.verify_ref(ref)
+            blob_paths[str(blob_store.path(ref).relative_to(folder))] = ref["$blob"]
+        required.update(blob_paths)
         if set(receipt["evidence"]) != required:
             raise ValueError("Experiment evidence manifest is incomplete or unexpected")
         if specification.get("artifact_contract") == "files/v1" and any(
@@ -385,7 +453,7 @@ class ExperimentRuntime:
         verdict = reader.document("verdict.json")
         if receipt["verdict"] != verdict or receipt["outcome"] != verdict["outcome"]:
             raise ValueError("Receipt disagrees with the recorded verdict")
-        trace = reader.document("trajectory.json")
+        trace = trajectory_document
         if receipt["steps"] != max(0, len(trace) - 1):
             raise ValueError("Receipt step count differs from the trajectory")
         if version == "v2":
@@ -412,6 +480,7 @@ class ExperimentRuntime:
         result = dict(receipt=receipt, specification=specification,
                     documents={name:reader.document(name) for name in ("reset.json", "trajectory.json", "verdict.json")},
                     evidence={str(reader.path(name)):sha for name,sha in reader.hashes.items()})
+        result["unreferenced_blobs"] = blob_store.unreferenced(unique_referenced)
         if journals:
             result["journals"] = journals
         if recovery is not None:
@@ -526,8 +595,11 @@ class ExperimentRuntime:
                                      phase_seconds=dict(phase_seconds))
             receipt["elapsed_seconds"] = phase_start - start
 
+        blob_store = blobs.BlobStore(folder / "blobs", fsync=self.durability in {"step", "final"})
+        blob_store.ensure_root()
         context = Context(run_id, deadline=start + budget.seconds,
-                          harness_revision=binding.system1.revision if binding else "")
+                          harness_revision=binding.system1.revision if binding else "",
+                          blobs=blob_store)
         case = specification["case"]
         trace = []
         journals = []
@@ -569,6 +641,12 @@ class ExperimentRuntime:
                 atomic_json(folder / "policy-evidence.json", value)
                 evidence_names.add("policy-evidence.json")
 
+        def check_observation_blobs(value):
+            # Stat only during rollout.  Full digest checks happen once at
+            # finalization, which keeps camera control steps inexpensive.
+            for ref in blobs.refs(value):
+                blob_store.check_ref(ref)
+
         try:
             stable()
             context.check()
@@ -576,6 +654,9 @@ class ExperimentRuntime:
             receipt['execution_phase'] = 'reset'
             atomic_json(folder / 'receipt.json', receipt)
             initial = _json(environment.reset(deepcopy(case), context))
+            if "observation" not in initial:
+                raise ValueError("Reset must return an observation")
+            check_observation_blobs(initial["observation"])
             atomic_json(folder / "reset.json", initial)
             enter_phase('rollout')
             receipt['execution_phase'] = 'episode'
@@ -620,6 +701,7 @@ class ExperimentRuntime:
                     if (type(result.get("terminated")) is not bool or "observation" not in result
                             or {"step", "action"}.intersection(result)):
                         raise ValueError("Environment must return observation and termination without action metadata")
+                    check_observation_blobs(result["observation"])
                     trace.append(dict(result, step=step, action=action))
                     # Retain returned observations even if the call exceeded its deadline.
                     trajectory_journal.append(trace[-1], fsync=journal_fsync("trajectory"))
@@ -632,7 +714,7 @@ class ExperimentRuntime:
                 stop_policy()
                 stable()
                 enter_phase("verification")
-                verdict = _json(verifier.verify(deepcopy(case), deepcopy(trace)))
+                verdict = _json(_verify_call(verifier, deepcopy(case), deepcopy(trace), context))
                 context.check()
                 if verdict.get("outcome") not in {"success", "failure", "uncertain"}:
                     raise ValueError("Verifier must return success, failure or uncertain")
@@ -659,10 +741,19 @@ class ExperimentRuntime:
             close_journals()
             atomic_json(folder / "trajectory.json", trace)
             atomic_json(folder / "verdict.json", verdict)
+            referenced, blob_paths = _blob_evidence(
+                folder, blob_store,
+                [initial, trace, verdict,
+                 read_json(folder / "policy-evidence.json")
+                 if (folder / "policy-evidence.json").exists() else None],
+            )
+            evidence_names.update(blob_paths)
+            unreferenced = blob_store.unreferenced(referenced)
             receipt.update(state="completed", outcome=verdict["outcome"], verdict=verdict,
                            execution_phase='completed',
                            steps=max(0, len(trace) - 1),
                            termination=termination,
+                           unreferenced_blobs=unreferenced,
                            evidence={name: file_digest(folder / name) for name in sorted(evidence_names)})
             record_timing()
             atomic_json(folder / "receipt.json", receipt)

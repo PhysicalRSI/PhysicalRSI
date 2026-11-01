@@ -13,6 +13,37 @@ SCHEMA = 'physicalrsi.sensors/v1'
 ACTION_SCHEMA = 'physicalrsi.actuator-target/v1'
 
 
+def store_rgbd(blobs, rgb, depth, *, camera="camera", sequence=0, timestamp_s=0.0,
+               metadata=None):
+    """Store an RGB-D camera sample and return a compact observation envelope.
+
+    ``blobs`` is the trial ``Context.blobs`` store.  Policies and verifiers
+    receive the returned references and can read arrays with
+    ``context.blobs.get_array(ref)``.  They must not write to the store.
+    """
+    if not isinstance(camera, str) or not camera:
+        raise ValueError("camera must be a nonempty string")
+    if type(sequence) is not int or sequence < 0:
+        raise ValueError("sequence must be a nonnegative integer")
+    if type(timestamp_s) not in (int, float) or not math.isfinite(timestamp_s):
+        raise ValueError("timestamp_s must be finite")
+    rgb_ref = blobs.put_png(rgb)
+    depth_ref = blobs.put_array(depth)
+    result = {
+        "schema": "physicalrsi.rgbd-refs/v1",
+        "camera": camera,
+        "sequence": sequence,
+        "timestamp_s": float(timestamp_s),
+        "rgb": rgb_ref,
+        "depth": depth_ref,
+    }
+    if metadata is not None:
+        if not isinstance(metadata, dict):
+            raise ValueError("metadata must be a JSON object")
+        result["metadata"] = deepcopy(metadata)
+    return result
+
+
 def _keys(value, expected):
     if not isinstance(value, dict) or set(value) != set(expected):
         raise ValueError('Unexpected or missing fields at sensor boundary')
