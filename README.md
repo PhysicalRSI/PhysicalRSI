@@ -102,6 +102,10 @@ selection supports paired-hoeffding, paired-permutation, and paired-t;
 paired-permutation is recommended for cohorts under 40 cases, while paired-t
 fits larger cohorts. The reported `cohort_power.mde_80_alpha` is the gain that
 the cohort can detect with 80 percent power at its comparison-adjusted alpha.
+The opt-in `paired-betting` method evaluates the frozen cohort in blocks and
+can stop early with anytime-valid error control under optional stopping. It
+records `evaluated_cases` in the decision and is recommended when trials are
+expensive and effects may be large.
 
 The language proposer is a data-only System 2 route: a model may suggest JSON
 number changes only for fields declared in the `ParameterSpace`. Bounds,

@@ -69,7 +69,8 @@ def experiment_score(receipt, *, score_measurement, score_range):
 
 
 def experiment_result(runtime, run_ids, *, candidate_id, comparison, cohort,
-                      evaluator_revision, evidence_root, score_measurement=None, replacements=None):
+                      evaluator_revision, evidence_root, score_measurement=None, replacements=None,
+                      case_pairs=None):
     """Build a selection result from exact paired cases and definite outcomes.
 
     Cases must hash to the cohort's layout identities. By default the native
@@ -98,14 +99,17 @@ def experiment_result(runtime, run_ids, *, candidate_id, comparison, cohort,
     root = Path(evidence_root).resolve()
     tasks = comparison["profile"]["tasks"]
     layouts = cohort["layouts"]
-    if set(layouts) != set(tasks) or any(
-        len(layouts[task]) != tasks[task]["episodes"] for task in tasks
-    ):
+    if set(layouts) != set(tasks):
+        raise ValueError("Experiment cohort coverage differs from the declared task profile")
+    if case_pairs is None and any(len(layouts[task]) != tasks[task]["episodes"] for task in tasks):
         raise ValueError("Experiment cohort coverage differs from the declared task profile")
     all_cases = [case for cases in layouts.values() for case in cases]
     if len(set(all_cases)) != len(all_cases):
         raise ValueError("Experiment cohort contains repeated cases")
-    expected = {(task, case) for task, cases in layouts.items() for case in cases}
+    full_expected = {(task, case) for task, cases in layouts.items() for case in cases}
+    expected = full_expected if case_pairs is None else set(case_pairs)
+    if not expected or not expected <= full_expected:
+        raise ValueError("Experiment cases are outside the frozen cohort")
     used, rows, protocols, system2_revisions = {}, [], [], set()
     for run_id in run_ids:
         evaluation = Evaluation.read(runtime, run_id)

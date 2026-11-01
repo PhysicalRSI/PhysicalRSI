@@ -242,19 +242,21 @@ def validate_profile(profile):
         )
     if "statistics" in profile:
         rule = profile["statistics"]
-        methods = {"paired-hoeffding", "paired-permutation", "paired-t"}
+        methods = {"paired-hoeffding", "paired-permutation", "paired-t", "paired-betting"}
         if not isinstance(rule, dict):
             raise ValueError(
-                "Declare a statistics method from paired-hoeffding, paired-permutation, paired-t"
+                "Declare a statistics method from paired-hoeffding, paired-permutation, paired-t, paired-betting"
             )
         method = rule.get("method")
         if method not in methods:
             raise ValueError(
-                "Unknown statistics method; choose paired-hoeffding, paired-permutation, or paired-t"
+                "Unknown statistics method; choose paired-hoeffding, paired-permutation, paired-t, or paired-betting"
             )
         allowed = {"method", "alpha", "max_comparisons"}
         if method == "paired-permutation":
             allowed.add("resamples")
+        if method == "paired-betting":
+            allowed.update({"min_cases", "bet_clip"})
         if set(rule) - allowed:
             raise ValueError("Statistics block contains an unsupported key")
         if (
@@ -269,6 +271,75 @@ def validate_profile(profile):
             or not 200 <= rule["resamples"] <= 100000
         ):
             raise ValueError("Permutation resamples must be an integer from 200 through 100000")
+        if method == "paired-betting":
+            if type(rule.get("min_cases", 8)) is not int or rule.get("min_cases", 8) < 4:
+                raise ValueError("Betting min_cases must be an integer of at least 4")
+            if not 0 < _number(rule.get("bet_clip", 0.5)) <= 1:
+                raise ValueError("Betting bet_clip must be in (0, 1]")
+
+
+def cohort_order(comparison, cohort):
+    """Return frozen validation pairs in balanced round-robin task order.
+
+    Tasks are visited in lexical order at each layout index, so prefixes contain
+    nearly equal numbers of cases from every task.
+    """
+    tasks = sorted(comparison["profile"]["tasks"])
+    layouts = cohort["layouts"]
+    if set(layouts) != set(tasks):
+        raise ValueError("Cohort task coverage differs")
+    return [(task, layouts[task][index])
+            for index in range(max((len(layouts[task]) for task in tasks), default=0))
+            for task in tasks if index < len(layouts[task])]
+
+
+def betting_evidence(x_values, threshold, alpha_c, *, min_cases=8, bet_clip=0.5):
+    """Anytime-valid paired betting evidence for ``mean(x) > threshold``.
+
+    Contributions are clipped to [-1, 1] before mapping to ``y`` in [0, 1].
+    The predictable plug-in bet uses the variance of observations available
+    before the current case, with initial variance 1/4.
+    """
+    if type(min_cases) is not int or min_cases < 4:
+        raise ValueError("min_cases must be an integer of at least 4")
+    if not 0 < _number(alpha_c) < 1 or not 0 < _number(bet_clip) <= 1:
+        raise ValueError("Invalid betting parameters")
+    values = [max(-1.0, min(1.0, _number(value))) for value in x_values]
+    log_plus = log_minus = 0.0
+    max_plus = max_minus = 0.0
+    history = []
+    stopping = None
+    decision = "undecided"
+    target = math.log(1.0 / alpha_c)
+    for index, value in enumerate(values, 1):
+        y = max(0.0, min(1.0, (value - threshold + 1.0) / 2.0))
+        previous_count = len(history)
+        if previous_count < 2:
+            variance = 0.25
+        else:
+            center = math.fsum(history) / previous_count
+            variance = math.fsum((item - center) ** 2 for item in history) / (previous_count - 1)
+            variance = max(variance, 1e-12)
+        lam = math.sqrt(2.0 * math.log(2.0 / alpha_c) /
+                        (variance * index * math.log(index + 1.0)))
+        lam = max(-bet_clip, min(bet_clip, lam))
+        centered = 2.0 * y - 1.0
+        log_plus += math.log1p(lam * centered)
+        log_minus += math.log1p(-lam * centered)
+        max_plus = max(max_plus, log_plus)
+        max_minus = max(max_minus, log_minus)
+        history.append(y)
+        if index >= min_cases and stopping is None:
+            if log_plus >= target:
+                decision, stopping = "accept", index
+            elif log_minus >= target:
+                decision, stopping = "reject", index
+    return dict(decision=decision, stopping_index=stopping,
+                log_capital_plus=log_plus, log_capital_minus=log_minus,
+                log_K_plus=log_plus, log_K_minus=log_minus,
+                n_used=len(values), max_log_capital_plus=max_plus,
+                max_log_capital_minus=max_minus,
+                max_log_K_plus=max_plus, max_log_K_minus=max_minus)
 
 
 def validate_admission_binding(
@@ -367,6 +438,8 @@ def select_survivor(
     weights = {task: spec["weight"] / largest for task, spec in tasks.items()}
     total_weight = math.fsum(weights.values())
     layouts = cohort["layouts"]
+    statistics = comparison["profile"].get("statistics")
+    betting = bool(statistics and statistics.get("method") == "paired-betting")
     if set(layouts) != set(tasks):
         raise ValueError("Cohort task coverage differs")
     seen = set()
@@ -380,6 +453,9 @@ def select_survivor(
                 raise ValueError("Duplicate geometry across task cohorts")
             seen.add(sha)
             expected.add((task, sha))
+    frozen_order = cohort_order(comparison, cohort)
+    expected = set(frozen_order)
+    cohort_cases = len(frozen_order)
     cohort_sha = digest(cohort)
     pool = comparison["candidates"]
     if len(results) != len(pool) or {r["candidate_id"] for r in results} != set(pool):
@@ -414,7 +490,14 @@ def select_survivor(
             raise ValueError("Missing evaluator identity")
         revisions.add(revision)
         rows = result["episodes"]
-        if len(rows) != len(expected):
+        if betting:
+            min_cases = statistics.get("min_cases", 8)
+            if len(rows) < min_cases or len(rows) > cohort_cases:
+                raise ValueError("Invalid sequential candidate evaluation prefix")
+            pairs = [(row["task"], row["layout_sha256"]) for row in rows]
+            if len(set(pairs)) != len(pairs) or set(pairs) != set(frozen_order[:len(pairs)]):
+                raise ValueError("Sequential candidate evaluation is not the frozen prefix")
+        elif len(rows) != len(expected):
             raise ValueError("Incomplete candidate evaluation")
         used = set()
         scores = {task: [] for task in tasks}
@@ -466,6 +549,10 @@ def select_survivor(
                                                for key, values in items.items()} for task, items in costs.items()}
     if len(revisions) != 1:
         raise ValueError("Mixed evaluator revisions")
+    evaluated_cases = len(results[0]["episodes"])
+    if betting and any(len(result["episodes"]) != evaluated_cases for result in results):
+        raise ValueError("Sequential candidates must cover the identical prefix")
+    expected = set(frozen_order[:evaluated_cases]) if betting else expected
     parent = comparison["parent_id"]
     parent_metrics = metrics[parent]
     profile = comparison["profile"]
@@ -487,7 +574,7 @@ def select_survivor(
             log_correction = math.log(statistics["max_comparisons"]) - math.log(statistics["alpha"])
             radius = math.sqrt(2 * log_correction * variance_bound)
 
-    n_total = len(expected)
+    n_total = cohort_cases if betting else len(expected)
     # For a case in task t, x_i = (w_t / W) * (n_total / n_t) * d_i.
     # Therefore mean(x) = sum_t (1/n_total) * (w_t/W) * (n_total/n_t)
     # * sum_i d_i = sum_t (w_t/W) * mean(d_t), exactly the normalized gain.
@@ -498,7 +585,7 @@ def select_survivor(
     contributions = {
         name: [
             contribution_factor[pair[0]] * (paired_scores[name][pair] - paired_scores[parent][pair])
-            for pair in sorted(expected)
+            for pair in (frozen_order[:evaluated_cases] if betting else sorted(expected))
         ]
         for name in metrics
         if name != parent
@@ -509,12 +596,12 @@ def select_survivor(
         statistics["alpha"] / statistics["max_comparisons"] if statistics else None
     )
     cohort_power = dict(
-        n_cases=n_total,
+        n_cases=evaluated_cases if betting else n_total,
         pooled_sd=pooled_sd,
         mde_80_alpha=(
             pooled_sd
             * (_normal_upper_quantile(alpha_per_comparison) + _normal_quantile(0.8))
-            / math.sqrt(n_total)
+            / math.sqrt(evaluated_cases if betting else n_total)
             if pooled_sd is not None and alpha_per_comparison is not None
             else None
         ),
@@ -540,13 +627,29 @@ def select_survivor(
         statistical_accept = True
         statistical_p = None
         if statistics:
-            differences = [paired_scores[name][pair] - paired_scores[parent][pair] for pair in sorted(expected)]
+            differences = [paired_scores[name][pair] - paired_scores[parent][pair]
+                           for pair in (frozen_order[:evaluated_cases] if betting else sorted(expected))]
             if statistics["method"] == "paired-hoeffding":
                 metric["improvement_evidence"] = dict(
                     method=statistics["method"], normalized_gain=gain, lower_bound=gain-radius,
                     alpha_per_comparison=alpha_per_comparison,
                     paired_wins=sum(d > 0 for d in differences), paired_losses=sum(d < 0 for d in differences),
                     paired_ties=sum(d == 0 for d in differences), independent_cases_required=True)
+            elif statistics["method"] == "paired-betting":
+                values = contributions[name]
+                threshold = profile["minimum_gain"] + profile["tie_tolerance"]
+                betting_state = betting_evidence(
+                    values, threshold, alpha_per_comparison,
+                    min_cases=statistics.get("min_cases", 8),
+                    bet_clip=statistics.get("bet_clip", 0.5),
+                )
+                statistical_accept = betting_state["decision"] == "accept"
+                metric["improvement_evidence"] = dict(
+                    method="paired-betting", normalized_gain=gain,
+                    alpha_per_comparison=alpha_per_comparison,
+                    threshold=threshold, evaluated_cases=evaluated_cases,
+                    cohort_cases=cohort_cases, **betting_state,
+                )
             else:
                 values = contributions[name]
                 threshold = profile["minimum_gain"] + profile["tie_tolerance"]
@@ -622,6 +725,10 @@ def select_survivor(
             rejection[name] = dict(reason="success_constraint", tasks=success_regressed)
         elif over_cost:
             rejection[name] = dict(reason="cost_constraint", measurements=over_cost)
+        elif statistics and statistics["method"] == "paired-betting" and not statistical_accept:
+            evidence = metric["improvement_evidence"]
+            rejection[name] = dict(reason="insufficient_evidence", normalized_gain=gain,
+                                    betting_state=evidence)
         elif gain <= profile["minimum_gain"] + profile["tie_tolerance"]:
             rejection[name] = dict(
                 reason="no_sufficient_improvement", normalized_gain=gain
@@ -653,6 +760,8 @@ def select_survivor(
         rejected=rejection,
         result_sha256={r["candidate_id"]: digest(r) for r in results},
         cohort_power=cohort_power,
+        evaluated_cases=evaluated_cases,
+        cohort_cases=cohort_cases,
         scope=comparison.get(
             "scope",
             "paired evidence integrity only; no automatic physical qualification",

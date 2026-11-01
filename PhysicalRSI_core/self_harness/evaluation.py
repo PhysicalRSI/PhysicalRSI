@@ -7,6 +7,7 @@ ExperimentRuntime after the complete plan has a durable quota reservation.
 
 from copy import deepcopy
 from dataclasses import asdict
+import math
 from pathlib import Path
 from typing import Protocol
 
@@ -20,7 +21,7 @@ from ..infra.trial_recovery import TrialRecovery, before_execution, inactive
 from . import now
 from .artifacts import verify_harness
 from .experiments import experiment_result, experiment_score, repetition_count
-from .selection import comparison_identity
+from .selection import comparison_identity, cohort_order, betting_evidence
 
 
 class ExperimentSuite(Protocol):
@@ -137,7 +138,11 @@ class ExperimentEvaluator:
                 raise ValueError("Keep mutable infrastructure outside round evidence")
         return output
 
-    def _plan(self, candidate_id, sha, cases, *, split, comparison=None, cohort=None):
+    def _plan(self, candidate_id, sha, cases, *, split, comparison=None, cohort=None,
+              case_order=None):
+        ordered = ([(task, case) for task, case in case_order]
+                   if case_order is not None else
+                   [(task, case) for task, values in sorted(cases.items()) for case in values])
         return dict(schema="physicalrsi.evaluation-plan/v1", split=split,
                     candidate_id=candidate_id, candidate_sha256=sha,
                     evaluator_revision=self.revision, scope=self.scope,
@@ -147,7 +152,7 @@ class ExperimentEvaluator:
                         dict(task=task, case=case, budget=asdict(self.budgets[task]),
                              run_id="trial-" + task_case_identity(task, case)
                              + (f"-repeat-{repeat:03d}" if self.repetitions > 1 else ""))
-                        for task, values in sorted(cases.items()) for case in values
+                        for task, case in ordered
                         for repeat in range(self.repetitions)])
 
     def _reservations(self, directory, plan):
@@ -380,7 +385,8 @@ class ExperimentEvaluator:
                                   comparison=comparison, cohort=cohort)
                 freeze_json(directory / "plan.json", plan)
                 plans.append((directory, plan))
-            self._reserve(plans)
+            if not getattr(self, "_sequential_mode", False):
+                self._reserve(plans)
             self._stable()
             return cohort
 
@@ -489,3 +495,185 @@ class ExperimentEvaluator:
                                     and p.name != "report.json" and p.suffix != ".lock"})
             freeze_json(output / "report.json", report)
             return report
+
+
+class SequentialEvaluator:
+    """Block evaluator for the opt-in paired-betting selection method.
+
+    The wrapped :class:`ExperimentEvaluator` remains responsible for trial
+    construction, recovery, quotas and evidence. This adapter only changes the
+    validation execution schedule and records the durable stopping prefix.
+    """
+
+    def __init__(self, evaluator, *, block_cases, selector_profile):
+        required = ("identity", "validation", "_plan", "_run_plan", "_reserve")
+        if any(not callable(getattr(evaluator, name, None)) for name in required):
+            raise ValueError("SequentialEvaluator requires an experiment evaluator port")
+        if type(block_cases) is not int or block_cases < 1:
+            raise ValueError("block_cases must be a positive integer")
+        method = selector_profile.get("statistics", {}).get("method")
+        if method != "paired-betting":
+            raise ValueError("SequentialEvaluator requires paired-betting statistics")
+        self.evaluator = evaluator
+        self.block_cases = block_cases
+        self.selector_profile = deepcopy(selector_profile)
+        self.evaluator._sequential_mode = True
+
+    def __getattr__(self, name):
+        return getattr(self.evaluator, name)
+
+    def identity(self):
+        return self.evaluator.identity()
+
+    def admit(self, candidate, output):
+        return self.evaluator.admit(candidate, output)
+
+    def validation(self, comparison, output):
+        return self.evaluator.validation(comparison, output)
+
+    def register_round(self, *args, **kwargs):
+        return self.evaluator.register_round(*args, **kwargs)
+
+    def _block_cases(self, comparison, cohort, cases, pairs):
+        by_sha = {task_case_identity(task, case): case
+                  for task, values in cases.items() for case in values}
+        result = {task: [] for task in cases}
+        for task, layout in pairs:
+            result[task].append(by_sha[layout])
+        return result
+
+    def _ordered_case_values(self, cases, pairs):
+        by_sha = {task_case_identity(task, case): case
+                  for task, values in cases.items() for case in values}
+        return [(task, by_sha[layout]) for task, layout in pairs]
+
+    def _block_result(self, candidate, comparison, cohort, output, directory, plan, pairs):
+        runtime = ExperimentRuntime(directory / "trials", device_registry=self.evaluator.device_registry)
+        rows = [row["run_id"] for row in self.evaluator._execution_rows(directory, plan)]
+        return experiment_result(
+            runtime, rows, candidate_id=candidate["id"], comparison=comparison,
+            cohort=cohort, evaluator_revision=self.evaluator.revision,
+            evidence_root=output, score_measurement=self.evaluator.score_measurement,
+            replacements={row["run_id"]: row["replacement"]
+                          for row in self.evaluator._execution_rows(directory, plan)},
+            case_pairs=set(pairs),
+        )
+
+    def _combine_results(self, candidate, comparison, cohort, output, block_records):
+        combined = None
+        for record in block_records:
+            partial = self._block_result(candidate, comparison, cohort, output,
+                                          Path(record["directory"]), record["plan"],
+                                          record["pairs"])
+            if combined is None:
+                combined = partial
+            else:
+                combined["episodes"].extend(partial["episodes"])
+        if combined is None:
+            raise ValueError("Sequential evaluation has no completed blocks")
+        order = {pair: index for index, pair in enumerate(cohort_order(comparison, cohort))}
+        combined["episodes"] = sorted(
+            combined["episodes"],
+            key=lambda row: order[(row["task"], row["layout_sha256"])],
+        )
+        return combined
+
+    def _states(self, comparison, cohort, results, evaluated_pairs):
+        profile = comparison["profile"]
+        tasks = profile["tasks"]
+        largest = max(spec["weight"] for spec in tasks.values())
+        weights = {task: spec["weight"] / largest for task, spec in tasks.items()}
+        total_weight = math.fsum(weights.values())
+        total_cases = sum(len(values) for values in cohort["layouts"].values())
+        factors = {task: (weights[task] / total_weight) * total_cases / tasks[task]["episodes"]
+                   for task in tasks}
+        by_candidate = {
+            result["candidate_id"]: {(row["task"], row["layout_sha256"]): row
+                                     for row in result["episodes"]}
+            for result in results
+        }
+        parent = comparison["parent_id"]
+        rule = profile["statistics"]
+        alpha_c = rule["alpha"] / rule["max_comparisons"]
+        threshold = profile["minimum_gain"] + profile["tie_tolerance"]
+        states = {}
+        for child in comparison["candidates"]:
+            if child == parent:
+                continue
+            values = []
+            for pair in evaluated_pairs:
+                task, _ = pair
+                low, high = tasks[task]["score_range"]
+                parent_score = (by_candidate[parent][pair]["score"] - low) / (high - low)
+                child_score = (by_candidate[child][pair]["score"] - low) / (high - low)
+                values.append(factors[task] * (child_score - parent_score))
+            states[child] = betting_evidence(
+                values, threshold, alpha_c, min_cases=rule.get("min_cases", 8),
+                bet_clip=rule.get("bet_clip", 0.5))
+        return states
+
+    def evaluate_pool(self, accepted, comparison, cohort, output):
+        output = self.evaluator._output(output)
+        cases = self.evaluator._cases(read_json(output / "validation-cases.json"), comparison["profile"])
+        order = cohort_order(comparison, cohort)
+        state_path = output / "sequential.json"
+        if state_path.exists():
+            state = read_json(state_path)
+            if state.get("comparison_sha256") != digest(comparison) or state.get("cohort_sha256") != digest(cohort):
+                raise ValueError("Sequential evaluation state differs from the frozen round")
+            if state.get("block_cases") != self.block_cases:
+                raise ValueError("Sequential block size changed during resume")
+            blocks_run = state["blocks_run"]
+        else:
+            state = dict(schema="physicalrsi.sequential-evaluation/v1",
+                         comparison_sha256=digest(comparison), cohort_sha256=digest(cohort),
+                         block_cases=self.block_cases, blocks=[], blocks_run=0,
+                         evaluated_cases=0)
+            blocks_run = 0
+        block_records = {candidate["id"]: [] for candidate in accepted}
+        for block_index in range(blocks_run):
+            pairs = order[block_index * self.block_cases:(block_index + 1) * self.block_cases]
+            for candidate in accepted:
+                directory = (output / "experiments" / "validation" / candidate["id"] /
+                             "sequential" / f"block-{block_index:04d}")
+                plan = self.evaluator._plan(
+                    candidate["id"], comparison["candidates"][candidate["id"]],
+                    self._block_cases(comparison, cohort, cases, pairs), split="validation",
+                    comparison=comparison, cohort=cohort,
+                    case_order=self._ordered_case_values(cases, pairs))
+                block_records[candidate["id"]].append(dict(directory=str(directory), plan=plan, pairs=pairs))
+        if not state_path.exists():
+            state["blocks_run"] = 0
+        while blocks_run * self.block_cases < len(order):
+            pairs = order[blocks_run * self.block_cases:(blocks_run + 1) * self.block_cases]
+            for candidate in accepted:
+                directory = (output / "experiments" / "validation" / candidate["id"] /
+                             "sequential" / f"block-{blocks_run:04d}")
+                block_cases = self._block_cases(comparison, cohort, cases, pairs)
+                plan = self.evaluator._plan(candidate["id"], comparison["candidates"][candidate["id"]],
+                                            block_cases, split="validation", comparison=comparison, cohort=cohort,
+                                            case_order=self._ordered_case_values(cases, pairs))
+                with locked(directory / ".plan.lock"):
+                    freeze_json(directory / "plan.json", plan)
+                    self.evaluator._reserve([(directory, plan)])
+                    self.evaluator._run_plan(candidate, directory, plan, comparison=comparison)
+                block_records[candidate["id"]].append(dict(directory=str(directory), plan=plan, pairs=pairs))
+            blocks_run += 1
+            prefix = order[:blocks_run * self.block_cases]
+            partial_results = [self._combine_results(candidate, comparison, cohort, output,
+                                                       block_records[candidate["id"]])
+                               for candidate in accepted]
+            states = self._states(comparison, cohort, partial_results, prefix)
+            state["blocks"].append(dict(block=blocks_run - 1, cases_evaluated=len(prefix),
+                                        decisions={name: value["decision"] for name, value in states.items()},
+                                        states=states))
+            state.update(blocks_run=blocks_run, evaluated_cases=len(prefix))
+            atomic_json(state_path, state)
+            if states and all(value["decision"] in {"accept", "reject"} for value in states.values()):
+                break
+        return [self._combine_results(candidate, comparison, cohort, output,
+                                      block_records[candidate["id"]])
+                for candidate in accepted]
+
+    def resume_evaluation_pool(self, accepted, comparison, cohort, output):
+        return self.evaluate_pool(accepted, comparison, cohort, output)
