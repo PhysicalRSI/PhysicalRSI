@@ -98,9 +98,13 @@ It is data that a user can design or import.
 **Darwinian Self-Harness.** System 2 develops the incumbent, proposes one or
 more candidates, admits them, evaluates them on a frozen comparison, selects a
 survivor, and records the parent, candidates, evidence, and outcome. Fixed-n
-selection supports paired-hoeffding, paired-permutation, and paired-t;
-paired-permutation is recommended for cohorts under 40 cases, while paired-t
-fits larger cohorts. The reported `cohort_power.mde_80_alpha` is the gain that
+selection supports paired-hoeffding, paired-permutation, and paired-t.
+Use paired-permutation by default: on the RSI-Bench-0 intercept task it kept
+zero false inheritances across 600 selection decisions while reaching 86 to 87
+percent oracle success in 15 rounds, against 42 to 52 percent under
+paired-hoeffding, whose range-based bound rejects most true improvements at
+robot trial budgets. paired-t fits cohorts above about 40 cases; keep
+paired-hoeffding only when a distribution-free bound is required. The reported `cohort_power.mde_80_alpha` is the gain that
 the cohort can detect with 80 percent power at its comparison-adjusted alpha.
 The opt-in `paired-betting` method evaluates the frozen cohort in blocks and
 can stop early with anytime-valid error control under optional stopping. It
