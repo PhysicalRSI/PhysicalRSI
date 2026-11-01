@@ -69,13 +69,32 @@ hidden score. Those details belong to the environment and evaluation adapter.
 
 ## Install
 
+Install a released wheel:
+
+```bash
+python -m pip install physicalrsi==0.3.0
+```
+
+To install directly from a pinned source tag:
+
+```bash
+python -m pip install "physicalrsi @ git+https://github.com/PhysicalRSI/PhysicalRSI.git@v0.3.0"
+```
+
+For local development, use an editable install:
+
 ```bash
 git clone https://github.com/PhysicalRSI/PhysicalRSI.git
 cd PhysicalRSI
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[runtime]'
+python -m pip install -e .
 ```
+
+The public names in [`physicalrsi.core`](src/physicalrsi/core.py) follow
+semantic versioning. Downstream code can use those names across compatible
+0.3.x releases and should review the changelog before adopting a new minor or
+major version.
 
 The repository launcher works without installing a console script:
 

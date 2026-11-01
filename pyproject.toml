@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "physicalrsi"
-version = "0.2.0"
+version = "0.3.0"
 description = "Composable embodied capabilities and persistent self-improvement"
 requires-python = ">=3.11"
 dependencies = ["rich>=13,<15", "prompt-toolkit>=3,<4", "jsonschema>=4.23,<5"]
@@ -13,20 +13,14 @@ dependencies = ["rich>=13,<15", "prompt-toolkit>=3,<4", "jsonschema>=4.23,<5"]
 physicalrsi = "physicalrsi.cli:main"
 
 [project.optional-dependencies]
-gym = ["gymnasium>=0.29,<2", "numpy>=1.26,<3"]
-real-robot = ["numpy>=1.26,<3", "scipy>=1.11,<2", "Pillow>=10,<13", "h5py>=3.8,<4", "av>=12,<17"]
-runtime = ["numpy>=1.26,<3"]
-self-model = ["numpy>=1.26,<3", "Pillow>=10,<13", "opencv-python-headless>=4.11,<5", "scipy>=1.11,<2", "trimesh>=4.4,<5"]
-visual-motion = ["numpy>=1.26,<3", "Pillow>=10,<13", "opencv-python-headless>=4.11,<5"]
-vision = ["numpy>=1.26,<3", "Pillow>=10,<13", "transformers>=4.55,<4.56", "torch>=2.3,<3"]
-mcp = ["mcp>=1.23,<2"]
-dataset = ["numpy>=1.26,<3", "lerobot>=0.3.3,<0.4"]
-test = ["pytest>=8,<10", "numpy>=1.26,<3", "Pillow>=10,<12", "scipy>=1.11,<2"]
-test-parallel = ["pytest-xdist>=3.8,<4"]
+gym = ["gymnasium>=0.29,<2"]
+vision = ["numpy>=1.26,<3", "Pillow>=10,<13"]
+test = ["pytest>=8,<10"]
 
 [tool.setuptools.packages.find]
 where = [".", "src"]
 include = ["PhysicalRSI*", "physicalrsi*"]
+exclude = ["tests", "tests.*", "examples", "examples.*", "*.__pycache__", "*.__pycache__.*"]
 
 [tool.setuptools.package-data]
 "PhysicalRSI.cli" = ["assets/*"]

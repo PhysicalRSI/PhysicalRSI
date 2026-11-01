@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+from . import __version__
+
 
 def _top_level_help():
     print("""usage: physicalrsi {evolve,harness,skills} ...
@@ -22,6 +24,9 @@ Use 'physicalrsi <command> --help' for command-specific options.""")
 
 def main(argv=None):
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments[:1] in (["--version"], ["-V"]):
+        print(__version__)
+        return 0
     if arguments[:1] in (["--help"], ["-h"]):
         _top_level_help()
         return 0
