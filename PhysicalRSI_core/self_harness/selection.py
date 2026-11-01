@@ -607,6 +607,14 @@ def select_survivor(
         ),
         alpha_per_comparison=alpha_per_comparison,
     )
+    # Report whether this cohort can ever certify an improvement. Permutation
+    # p-values cannot fall below 2 / (1 + 2**n) (exact) or 1 / (1 + resamples),
+    # so a small cohort with a corrected alpha can be unable to accept any child.
+    if statistics and statistics["method"] == "paired-permutation":
+        cases = n_total
+        floor = (2.0 / (1 + 2 ** cases)) if cases <= 12 else 1.0 / (1 + statistics.get("resamples", 2000))
+        cohort_power["min_attainable_p"] = floor
+        cohort_power["attainable"] = floor <= alpha_per_comparison
     for name, metric in metrics.items():
         if name == parent:
             continue
