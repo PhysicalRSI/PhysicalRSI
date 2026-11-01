@@ -8,6 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from ..infra.storage import atomic_json, digest, file_digest, locked, read_json
+from ..contracts import InfrastructureFault
 
 
 def _sha(value):

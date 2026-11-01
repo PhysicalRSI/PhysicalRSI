@@ -19,7 +19,10 @@ from .bindings import policy_identity
 
 def development_evaluations(parent, feedback, output):
     """Rehydrate exact development trials; reject substituted or stale traces."""
-    if feedback.get("split") != "evolve" or not feedback.get("evaluations"):
+    if (feedback.get("split") != "evolve"
+            or "evaluations" not in feedback
+            or (not feedback.get("evaluations")
+                and not feedback.get("infrastructure_unavailable"))):
         raise ValueError("Evolver requires completed development rollouts")
     values = read_development_evaluations(parent, feedback, output)
     if values != feedback["evaluations"]:
@@ -30,7 +33,9 @@ def development_evaluations(parent, feedback, output):
 def read_development_evaluations(parent, feedback, output):
     """Rehydrate a complete plan from disk; no caller-supplied trace is trusted."""
     root = Path(output).resolve()
-    if feedback.get("split") != "evolve" or not feedback.get("episodes"):
+    if (feedback.get("split") != "evolve"
+            or (not feedback.get("episodes")
+                and not feedback.get("infrastructure_unavailable"))):
         raise ValueError("Evolver requires completed development rollouts")
     expected_sha = verify_harness(parent)
     allowed = {}
@@ -73,9 +78,31 @@ def read_development_evaluations(parent, feedback, output):
                  measurements=value["verdict"]["measurements"]) for value in values]
     if rows != feedback["episodes"]:
         raise ValueError("Development episodes differ from the actual rollouts")
-    trials = [{key: value["trial"][key] for key in ("task", "case", "budget")}
-              | {"run_id": value.get('recovery', {}).get('original_id', value["trial"]["id"])} for value in values]
-    if trials != plan["trials"] or any(value["trial"]["scope"] != plan["scope"] for value in values):
+    logical_by_attempt = {}
+    # The public feedback does not expose evaluator internals, so derive the
+    # retry mapping from the frozen infrastructure record when present.
+    retry_path = plan_path.parent / "infrastructure.json"
+    if retry_path.exists():
+        retry_record = json.loads(retry_path.read_bytes())
+        for logical, entry in retry_record.get("trials", {}).items():
+            for attempt in entry.get("attempts", []):
+                logical_by_attempt[attempt] = logical
+    trials_by_logical = {}
+    for value in values:
+        attempt = value.get('recovery', {}).get('original_id', value["trial"]["id"])
+        logical = logical_by_attempt.get(attempt, attempt)
+        trials_by_logical[logical] = {key: value["trial"][key]
+                                      for key in ("task", "case", "budget")} | {"run_id": logical}
+    unavailable = feedback.get("infrastructure_unavailable", [])
+    plan_by_id = {item["run_id"]: item for item in plan["trials"]}
+    for row in unavailable:
+        if row.get("run_id") not in plan_by_id or any(
+                row.get(key) != plan_by_id[row["run_id"]][key] for key in ("task", "case")):
+            raise ValueError("Infrastructure-unavailable development trial differs from the frozen plan")
+        trials_by_logical[row["run_id"]] = dict(plan_by_id[row["run_id"]])
+    trials = [trials_by_logical.get(item["run_id"]) for item in plan["trials"]]
+    if any(trial is None for trial in trials) or trials != plan["trials"] or any(
+            value["trial"]["scope"] != plan["scope"] for value in values):
         raise ValueError("Development rollouts do not cover the frozen plan")
     # Every Trial file above was read and verified by Evaluation. Auxiliary
     # declared files still require their own audit, even when no Trial uses them.

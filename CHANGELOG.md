@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Separate policy deadlines from infrastructure faults in trial evidence.
+- Retry infrastructure-faulted paired trials deterministically and drop an
+  exhausted pair from both arms' statistics.
+- Record host-versus-port timing and document retry behavior for physical
+  links and sensors.
+
 ## 0.3.0
 
 This release turns the PhysicalRSI core into a versioned installable dependency.

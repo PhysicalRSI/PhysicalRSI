@@ -48,7 +48,8 @@ def freeze_json(path, value):
 class ExperimentEvaluator:
     def __init__(self, *, suite: ExperimentSuite, budgets: dict[str, Budget],
                  scope: str, system2: Revision, quota, device_registry=None,
-                 score_measurement=None, max_replacements=0, repetitions=1):
+                 score_measurement=None, max_replacements=0, repetitions=1,
+                 infrastructure_retries=2):
         if (not budgets or any(not isinstance(t, str) or not t for t in budgets)
                 or any(not isinstance(b, Budget) for b in budgets.values())):
             raise ValueError("Declare an experiment budget for each task")
@@ -58,10 +59,13 @@ class ExperimentEvaluator:
             raise ValueError("A score measurement must be a nonempty name")
         if type(max_replacements) is not int or not 0 <= max_replacements <= 10:
             raise ValueError('Declare zero to ten replacements per planned Trial')
+        if type(infrastructure_retries) is not int or not 0 <= infrastructure_retries <= 10:
+            raise ValueError('Declare zero to ten infrastructure retries per planned Trial')
         self.suite, self.budgets, self.scope = suite, deepcopy(budgets), scope
         self.system2, self.quota, self.device_registry = system2, quota, device_registry
         self.score_measurement = score_measurement
         self.max_replacements = max_replacements
+        self.infrastructure_retries = infrastructure_retries
         self.repetitions = repetition_count(repetitions)
         self._identity = deepcopy(self.identity())
         self.revision = digest(self._identity)
@@ -75,6 +79,7 @@ class ExperimentEvaluator:
                     device_registry=self.device_registry.identity() if self.device_registry else None,
                     score_measurement=self.score_measurement,
                     max_replacements=self.max_replacements,
+                    infrastructure_retries=self.infrastructure_retries,
                     repetitions=self.repetitions,
                     implementation=dict(experiments.runtime_implementation(), **{
                         name: file_digest(path) for name, path in {
@@ -148,6 +153,7 @@ class ExperimentEvaluator:
                     evaluator_revision=self.revision, scope=self.scope,
                     comparison_sha256=digest(comparison) if comparison is not None else None,
                     cohort_sha256=digest(cohort) if cohort is not None else None,
+                    infrastructure_retries=self.infrastructure_retries,
                     cases=cases, trials=[
                         dict(task=task, case=case, budget=asdict(self.budgets[task]),
                              run_id="trial-" + task_case_identity(task, case)
@@ -155,10 +161,49 @@ class ExperimentEvaluator:
                         for task, case in ordered
                         for repeat in range(self.repetitions)])
 
+    def _infrastructure_retry_id(self, directory, logical_run_id, index):
+        return "infrastructure-retry-" + digest(dict(directory=str(directory),
+                                                       run_id=logical_run_id, index=index))
+
+    def _infrastructure_record(self, directory, plan):
+        path = Path(directory) / "infrastructure.json"
+        if not path.exists():
+            return None
+        record = read_json(path)
+        if (record.get("schema") != "physicalrsi.infrastructure-retries/v1"
+                or record.get("plan_sha256") != digest(plan)
+                or not isinstance(record.get("trials"), dict)):
+            raise ValueError("Infrastructure retry record differs from the frozen plan")
+        logical_ids = {row["run_id"] for row in plan["trials"]}
+        if set(record["trials"]) - logical_ids:
+            raise ValueError("Infrastructure retry record contains an unknown trial")
+        for logical, entry in record["trials"].items():
+            if (not isinstance(entry, dict) or not isinstance(entry.get("attempts"), list)
+                    or not entry["attempts"] or entry["attempts"][0] != logical
+                    or len(entry["attempts"]) > self.infrastructure_retries + 1
+                    or len(set(entry["attempts"])) != len(entry["attempts"])):
+                raise ValueError("Infrastructure retry attempts are invalid")
+            for index, attempt in enumerate(entry["attempts"][1:], 1):
+                if attempt != self._infrastructure_retry_id(directory, logical, index):
+                    raise ValueError("Infrastructure retry identity changed")
+            selected, unavailable = entry.get("selected"), entry.get("unavailable", False)
+            if type(unavailable) is not bool or (unavailable and selected is not None):
+                raise ValueError("Infrastructure retry state is invalid")
+            if selected is not None and selected not in entry["attempts"]:
+                raise ValueError("Infrastructure retry selection is invalid")
+        return record
+
     def _reservations(self, directory, plan):
-        return {digest(dict(directory=str(directory), run_id=row["run_id"])):
-                dict(plan_sha256=digest(plan), run_id=row["run_id"])
-                for row in plan["trials"]}
+        reservations = {digest(dict(directory=str(directory), run_id=row["run_id"])):
+                        dict(plan_sha256=digest(plan), run_id=row["run_id"])
+                        for row in plan["trials"]}
+        record = self._infrastructure_record(directory, plan)
+        if record is not None:
+            for entry in record.get("trials", {}).values():
+                for run_id in entry.get("attempts", [])[1:]:
+                    reservations[digest(dict(directory=str(directory), run_id=run_id))] = dict(
+                        plan_sha256=digest(plan), run_id=run_id)
+        return reservations
 
     def _reserve(self, plans):
         # Reserve the entire candidate pool before evaluating its first member.
@@ -168,7 +213,14 @@ class ExperimentEvaluator:
         self.quota.reserve(requests)
         for directory, plan in plans:
             receipt = self.quota.reserve(self._reservations(directory, plan))
-            freeze_json(directory / "quota.json", receipt)
+            quota_path = directory / "quota.json"
+            if quota_path.exists():
+                previous = read_json(quota_path)
+                if not set(previous.get("trials", {})) <= set(receipt["trials"]):
+                    raise ValueError("Infrastructure retry reservation removed an earlier trial")
+                atomic_json(quota_path, receipt)
+            else:
+                freeze_json(quota_path, receipt)
 
     def _recovery(self, directory, plan):
         return TrialRecovery(directory, plan, quota=self.quota, device_registry=self.device_registry,
@@ -176,8 +228,22 @@ class ExperimentEvaluator:
 
     def _execution_rows(self, directory, plan):
         recovery = self._recovery(directory, plan)
-        return [dict(row, logical_run_id=row['run_id'], **{
-            k: v for k, v in recovery.resolve(row['run_id']).items()}) for row in plan['trials']]
+        metadata = self._infrastructure_record(directory, plan)
+        result = []
+        for row in plan['trials']:
+            value = dict(row, logical_run_id=row['run_id'], **{
+                k: v for k, v in recovery.resolve(row['run_id']).items()})
+            entry = (metadata or {}).get("trials", {}).get(row["run_id"])
+            if entry is not None:
+                selected = entry.get("selected")
+                if entry.get("unavailable"):
+                    value["run_id"] = None
+                    value["infrastructure_unavailable"] = True
+                elif selected:
+                    value["run_id"] = selected
+                value["infrastructure_attempts"] = list(entry.get("attempts", []))
+            result.append(value)
+        return result
 
     def _replacement_plan(self, directory, plan):
         """Audit an inactive plan before releasing its queue reservation."""
@@ -243,7 +309,7 @@ class ExperimentEvaluator:
                               plan["split"], plan["comparison_sha256"], plan["cohort_sha256"])
 
         def require_validation_outcome(receipt, task):
-            if plan["split"] == "validation" and receipt["outcome"] not in {"success", "failure"}:
+            if plan["split"] == "validation" and receipt["outcome"] not in {"success", "failure", "deadline"}:
                 raise ReconciliationRequired(
                     "Validation trial has no definite task outcome: "
                     + str(runtime.root / receipt["id"]) + "; preserve its evidence before further evaluation")
@@ -256,15 +322,25 @@ class ExperimentEvaluator:
                         "Validation trial has an invalid score measurement: "
                         + str(runtime.root / receipt["id"])) from error
 
-        # Discover every unresolved trial before executing any missing one.
+        expected_spec = lambda row: dict(task=row["task"], case=row["case"], budget=row["budget"],
+                                         scope=self.scope, system2=asdict(origin), replacement=row['replacement'])
+
+        # Discover every existing attempt before executing any missing one.
+        # A completed infrastructure receipt is retryable; all other completed
+        # receipts are audited against the frozen logical slot.
         for row in execution_rows:
+            if row.get("run_id") is None:
+                continue
             folder = runtime.root / row["run_id"]
             if (folder / "receipt.json").exists():
                 audited = runtime.read_evidence(row["run_id"])
                 receipt, specification = audited['receipt'], audited['specification']
-                expected = dict(task=row["task"], case=row["case"], budget=row["budget"],
-                                scope=self.scope, system2=asdict(origin), replacement=row['replacement'])
-                if any(specification.get(key) != value for key, value in expected.items()):
+                if receipt.get("outcome") == "infrastructure-fault":
+                    if any(specification.get(key) != value
+                           for key, value in expected_spec(row).items()):
+                        raise ValueError("Faulted trial differs from the frozen plan")
+                    continue
+                if any(specification.get(key) != value for key, value in expected_spec(row).items()):
                     raise ValueError("Completed trial differs from the frozen plan")
                 require_validation_outcome(receipt, row["task"])
             else:
@@ -274,21 +350,87 @@ class ExperimentEvaluator:
                     previous = read_json(folder / 'recovery/source/experiment.json')
                     before_execution(folder, row['run_id'], dict(previous, replacement=row['replacement']), self.device_registry)
         receipts = []
+        metadata_path = directory / "infrastructure.json"
+        metadata = self._infrastructure_record(directory, plan)
+
+        def save_metadata():
+            nonlocal metadata
+            if metadata is not None:
+                atomic_json(metadata_path, metadata)
+
+        def reserve_retry(run_id):
+            request = {digest(dict(directory=str(directory), run_id=run_id)):
+                       dict(plan_sha256=digest(plan), run_id=run_id)}
+            self.quota.reserve(request)
+            receipt = self.quota.reserve(self._reservations(directory, plan))
+            atomic_json(directory / "quota.json", receipt)
+
         for row in execution_rows:
+            entry = (metadata or {}).get("trials", {}).get(row["logical_run_id"])
+            if entry and (entry.get("unavailable") or entry.get("selected")):
+                if entry.get("unavailable"):
+                    continue
+                selected = entry["selected"]
+                receipt = runtime.read(selected)
+                require_validation_outcome(receipt, row["task"])
+                receipts.append(receipt)
+                continue
             self._stable()
             if verify_harness(candidate) != plan["candidate_sha256"]:
                 raise ValueError("Candidate changed between trials")
             task = row["task"]
-            trial = Trial(row["run_id"], task=task, case=row["case"], scope=self.scope,
-                          budget=self.budgets[task], system2=origin, replacement=row['replacement'])
-            adapters = trial_adapters(self.suite, candidate, task)
-            self._stable()
-            if verify_harness(candidate) != plan["candidate_sha256"]:
-                raise ValueError("Candidate changed during trial adapter construction")
-            receipt = runtime.run_trial(trial, environment=adapters.environment,
-                                        policy=adapters.policy, verifier=adapters.verifier)
-            require_validation_outcome(receipt, task)
-            receipts.append(receipt)
+            attempts = list(entry.get("attempts", [])) if entry else [row["logical_run_id"]]
+            selected_receipt = None
+            while attempts and len(attempts) <= self.infrastructure_retries + 1:
+                attempt_id = attempts[-1]
+                folder = runtime.root / attempt_id
+                if (folder / "receipt.json").exists():
+                    receipt = runtime.read(attempt_id)
+                else:
+                    trial = Trial(attempt_id, task=task, case=row["case"], scope=self.scope,
+                                  budget=self.budgets[task], system2=origin, replacement=row['replacement'])
+                    adapters = trial_adapters(self.suite, candidate, task)
+                    self._stable()
+                    if verify_harness(candidate) != plan["candidate_sha256"]:
+                        raise ValueError("Candidate changed during trial adapter construction")
+                    receipt = runtime.run_trial(trial, environment=adapters.environment,
+                                                policy=adapters.policy, verifier=adapters.verifier)
+                if receipt.get("outcome") != "infrastructure-fault":
+                    expected = expected_spec(row)
+                    audited = runtime.read_evidence(attempt_id)
+                    if any(audited['specification'].get(key) != value for key, value in expected.items()):
+                        raise ValueError("Completed trial differs from the frozen plan")
+                    require_validation_outcome(receipt, task)
+                    selected_receipt = receipt
+                    if entry is not None:
+                        entry.update(selected=attempt_id, attempts=attempts, unavailable=False)
+                        save_metadata()
+                    break
+                fault_audit = runtime.read_evidence(attempt_id)
+                if any(fault_audit['specification'].get(key) != value
+                       for key, value in expected_spec(row).items()):
+                    raise ValueError("Faulted retry differs from the frozen plan")
+                # The faulted attempt is already closed and auditable before
+                # this durable metadata record permits a retry.
+                if metadata is None:
+                    metadata = dict(schema="physicalrsi.infrastructure-retries/v1",
+                                    plan_sha256=digest(plan), trials={})
+                entry = metadata["trials"].setdefault(row["logical_run_id"],
+                    dict(attempts=list(attempts), selected=None, unavailable=False))
+                entry["attempts"] = list(attempts)
+                save_metadata()
+                if len(attempts) > self.infrastructure_retries:
+                    entry["unavailable"] = True
+                    entry["selected"] = None
+                    save_metadata()
+                    break
+                next_id = self._infrastructure_retry_id(directory, row["logical_run_id"], len(attempts))
+                attempts.append(next_id)
+                entry["attempts"] = list(attempts)
+                save_metadata()
+                reserve_retry(next_id)
+            if selected_receipt is not None:
+                receipts.append(selected_receipt)
         self._stable()
         if verify_harness(candidate) != plan["candidate_sha256"]:
             raise ValueError("Candidate changed during trial execution")
@@ -321,20 +463,39 @@ class ExperimentEvaluator:
             raise ValueError("Development plan or quota changed")
         runtime = ExperimentRuntime(directory / "trials", device_registry=self.device_registry)
         execution_rows = self._execution_rows(directory, plan)
-        values = [Evaluation.read(runtime, row["run_id"]).to_dict() for row in execution_rows]
+        planned_counts = {}
+        available_counts = {}
+        for row in execution_rows:
+            key = (row["task"], task_case_identity(row["task"], row["case"]))
+            planned_counts[key] = planned_counts.get(key, 0) + 1
+            if row.get("run_id") is not None:
+                available_counts[key] = available_counts.get(key, 0) + 1
+        complete_cases = {key for key, count in planned_counts.items()
+                          if available_counts.get(key, 0) == count}
+        available_rows = [row for row in execution_rows
+                          if row.get("run_id") is not None
+                          and (row["task"], task_case_identity(row["task"], row["case"]))
+                          in complete_cases]
+        values = [Evaluation.read(runtime, row["run_id"]).to_dict() for row in available_rows]
         if any(value['trial'].get('replacement') != row['replacement']
-               for row, value in zip(execution_rows, values)):
+               for row, value in zip(available_rows, values)):
             raise ValueError('Development replacement differs from the frozen plan')
         rows = [dict(task=row["task"], case=row["case"], run_id=row["run_id"],
                      outcome=value["outcome"], measurements=value["verdict"]["measurements"])
-                for row, value in zip(execution_rows, values)]
+                for row, value in zip(available_rows, values)]
+        unavailable = [dict(task=row["task"], case=row["case"],
+                            run_id=row["logical_run_id"],
+                            attempts=row.get("infrastructure_attempts", []))
+                       for row in execution_rows if row.get("run_id") is None]
         evidence = {str(p.relative_to(output)): file_digest(p) for p in directory.rglob("*.json")}
         for value in values:
             for name, sha in value["evidence"].items():
                 evidence[str(Path(name).relative_to(output))] = sha
         result = dict(split="evolve", evaluator_revision=self.revision, episodes=rows,
                       evaluations=values, evidence=evidence,
-                      costs=dict(reserved_trials=len(rows) + sum(row['attempts'] for row in execution_rows)))
+                      infrastructure_unavailable=unavailable,
+                      costs=dict(reserved_trials=len(plan["trials"]) +
+                                 sum(row['attempts'] for row in execution_rows)))
         from .rollout import development_evaluations
         development_evaluations(parent, result, output)
         return result
@@ -346,6 +507,8 @@ class ExperimentEvaluator:
             raise ValueError("Comparison scope differs from evaluator scope")
         if set(comparison["profile"]["tasks"]) != set(self.budgets):
             raise ValueError("Comparison tasks differ from the declared experiment budgets")
+        if comparison["profile"].get("infrastructure_retries", 2) != self.infrastructure_retries:
+            raise ValueError("Comparison infrastructure retry allowance differs from the evaluator")
         return comparison
 
     def validation(self, comparison, output):
@@ -373,6 +536,7 @@ class ExperimentEvaluator:
             generated_at = read_json(cohort_path)["generated_at"] if cohort_path.exists() else now()
             cohort = dict(split="validation", comparison_sha256=digest(comparison), case_identity="task-case/v1",
                           generated_at=generated_at, layouts=layouts,
+                          infrastructure_retries=self.infrastructure_retries,
                           admission_evidence={str(p.relative_to(output)): file_digest(p)
                                               for p in (path, development_path)})
             if self.repetitions > 1:
@@ -435,14 +599,26 @@ class ExperimentEvaluator:
             raise ValueError("Evaluation quota receipt changed")
         runtime = ExperimentRuntime(directory / "trials", device_registry=self.device_registry)
         execution_rows = self._execution_rows(directory, plan)
+        available_rows = [row for row in execution_rows if row.get("run_id") is not None]
+        if not available_rows:
+            raise ReconciliationRequired("No paired validation cases remain after infrastructure faults")
         result = experiment_result(
-            runtime, [row["run_id"] for row in execution_rows], candidate_id=candidate["id"],
+            runtime, [row["run_id"] for row in available_rows], candidate_id=candidate["id"],
             comparison=comparison, cohort=cohort, evaluator_revision=self.revision,
             evidence_root=output, score_measurement=self.score_measurement,
-            replacements={row['run_id']: row['replacement'] for row in execution_rows})
+            replacements={row['run_id']: row['replacement'] for row in available_rows},
+            case_pairs={(row["task"], task_case_identity(row["task"], row["case"]))
+                        for row in available_rows})
+        unavailable_pairs = sorted({(row["task"], task_case_identity(row["task"], row["case"]))
+                                    for row in execution_rows if row.get("run_id") is None})
+        if unavailable_pairs:
+            result["infrastructure_unavailable"] = unavailable_pairs
         for row in result["episodes"]:
             row["evidence_sha256"].update({str(p.relative_to(output)): file_digest(p)
                 for p in (directory / "plan.json", directory / "quota.json")})
+            if (directory / "infrastructure.json").exists():
+                path = directory / "infrastructure.json"
+                row["evidence_sha256"][str(path.relative_to(output))] = file_digest(path)
             if (directory / 'replacements.json').exists():
                 path = directory / 'replacements.json'
                 row['evidence_sha256'][str(path.relative_to(output))] = file_digest(path)
@@ -549,15 +725,32 @@ class SequentialEvaluator:
 
     def _block_result(self, candidate, comparison, cohort, output, directory, plan, pairs):
         runtime = ExperimentRuntime(directory / "trials", device_registry=self.evaluator.device_registry)
-        rows = [row["run_id"] for row in self.evaluator._execution_rows(directory, plan)]
-        return experiment_result(
+        execution_rows = self.evaluator._execution_rows(directory, plan)
+        available = [row for row in execution_rows if row.get("run_id") is not None]
+        if self.evaluator.repetitions > 1:
+            planned, counts = {}, {}
+            for row in execution_rows:
+                key = (row["task"], task_case_identity(row["task"], row["case"]))
+                planned[key] = planned.get(key, 0) + 1
+                if row.get("run_id") is not None:
+                    counts[key] = counts.get(key, 0) + 1
+            complete = {key for key, count in planned.items() if counts.get(key, 0) == count}
+            available = [row for row in available
+                         if (row["task"], task_case_identity(row["task"], row["case"])) in complete]
+        rows = [row["run_id"] for row in available]
+        result = experiment_result(
             runtime, rows, candidate_id=candidate["id"], comparison=comparison,
             cohort=cohort, evaluator_revision=self.evaluator.revision,
             evidence_root=output, score_measurement=self.evaluator.score_measurement,
-            replacements={row["run_id"]: row["replacement"]
-                          for row in self.evaluator._execution_rows(directory, plan)},
-            case_pairs=set(pairs),
+            replacements={row["run_id"]: row["replacement"] for row in available},
+            case_pairs={(row["task"], task_case_identity(row["task"], row["case"]))
+                        for row in available},
         )
+        unavailable = sorted({(row["task"], task_case_identity(row["task"], row["case"]))
+                             for row in execution_rows if row.get("run_id") is None})
+        if unavailable:
+            result["infrastructure_unavailable"] = unavailable
+        return result
 
     def _combine_results(self, candidate, comparison, cohort, output, block_records):
         combined = None
@@ -584,9 +777,6 @@ class SequentialEvaluator:
         largest = max(spec["weight"] for spec in tasks.values())
         weights = {task: spec["weight"] / largest for task, spec in tasks.items()}
         total_weight = math.fsum(weights.values())
-        total_cases = sum(len(values) for values in cohort["layouts"].values())
-        factors = {task: (weights[task] / total_weight) * total_cases / tasks[task]["episodes"]
-                   for task in tasks}
         by_candidate = {
             result["candidate_id"]: {(row["task"], row["layout_sha256"]): row
                                      for row in result["episodes"]}
@@ -596,6 +786,12 @@ class SequentialEvaluator:
         rule = profile["statistics"]
         alpha_c = rule["alpha"] / rule["max_comparisons"]
         threshold = profile["minimum_gain"] + profile["tie_tolerance"]
+        common = set.intersection(*(set(rows) for rows in by_candidate.values()))
+        evaluated_pairs = [pair for pair in evaluated_pairs if pair in common]
+        counts = {task: sum(pair[0] == task for pair in evaluated_pairs) for task in tasks}
+        total_cases = len(evaluated_pairs)
+        factors = {task: (weights[task] / total_weight) * total_cases / counts[task]
+                   for task in tasks if counts[task]}
         states = {}
         for child in comparison["candidates"]:
             if child == parent:

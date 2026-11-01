@@ -208,6 +208,9 @@ def comparison_identity(comparison):
 
 def validate_profile(profile):
     """Reject an invalid scoring protocol before any development or trials."""
+    retries = profile.get("infrastructure_retries", 2)
+    if type(retries) is not int or not 0 <= retries <= 10:
+        raise ValueError("Declare zero to ten infrastructure retries")
     tasks = profile["tasks"]
     if not tasks:
         raise ValueError("Empty task scope")
@@ -464,6 +467,34 @@ def select_survivor(
         protocols = {_sha(result.get("experiment_protocol_sha256")) for result in results}
         if len(protocols) != 1:
             raise ValueError("Paired experiment execution or scoring protocols differ")
+    # Infrastructure exhaustion removes a logical pair from the comparison for
+    # every arm.  Results may therefore contain different subsets of the
+    # frozen cohort; retain only the intersection so an arm that completed a
+    # case cannot turn the other arm's unavailable case into a policy failure.
+    available_sets = []
+    for result in results:
+        pairs = {(row.get("task"), row.get("layout_sha256")) for row in result.get("episodes", [])}
+        if any(task not in tasks or layout not in set(layouts[task]) for task, layout in pairs):
+            raise ValueError("Result contains a case outside the frozen cohort")
+        available_sets.append(pairs)
+    if (betting and len({frozenset(pairs) for pairs in available_sets}) != 1
+            and not any(result.get("infrastructure_unavailable") for result in results)):
+        raise ValueError("Sequential candidate evaluation is not the frozen prefix")
+    if available_sets:
+        expected = set.intersection(*available_sets)
+        if not expected:
+            raise ValueError("No paired cases remain after infrastructure faults")
+        if not betting:
+            cohort_cases = len(expected)
+        if not betting and any(not any(pair[0] == task for pair in expected) for task in tasks):
+            raise ValueError("Infrastructure faults removed every case for a task")
+    evaluation_order = [pair for pair in frozen_order if pair in expected]
+    if betting:
+        filtered_sets = [frozenset(pair for pair in pairs if pair in expected)
+                         for pairs in available_sets]
+        if (len(set(filtered_sets)) != 1
+                and not any(result.get("infrastructure_unavailable") for result in results)):
+            raise ValueError("Sequential candidates must cover the identical prefix")
     root = Path(evidence_root).resolve()
     metrics = {}
     paired_scores = {}
@@ -489,13 +520,15 @@ def select_survivor(
         if not isinstance(revision, str) or not revision:
             raise ValueError("Missing evaluator identity")
         revisions.add(revision)
-        rows = result["episodes"]
+        rows = [row for row in result["episodes"]
+                if (row.get("task"), row.get("layout_sha256")) in expected]
         if betting:
             min_cases = statistics.get("min_cases", 8)
             if len(rows) < min_cases or len(rows) > cohort_cases:
                 raise ValueError("Invalid sequential candidate evaluation prefix")
             pairs = [(row["task"], row["layout_sha256"]) for row in rows]
-            if len(set(pairs)) != len(pairs) or set(pairs) != set(frozen_order[:len(pairs)]):
+            if (len(set(pairs)) != len(pairs)
+                    or set(pairs) != set(evaluation_order[:len(pairs)])):
                 raise ValueError("Sequential candidate evaluation is not the frozen prefix")
         elif len(rows) != len(expected):
             raise ValueError("Incomplete candidate evaluation")
@@ -552,7 +585,6 @@ def select_survivor(
     evaluated_cases = len(results[0]["episodes"])
     if betting and any(len(result["episodes"]) != evaluated_cases for result in results):
         raise ValueError("Sequential candidates must cover the identical prefix")
-    expected = set(frozen_order[:evaluated_cases]) if betting else expected
     parent = comparison["parent_id"]
     parent_metrics = metrics[parent]
     profile = comparison["profile"]
@@ -567,25 +599,28 @@ def select_survivor(
         # Hoeffding plus a union bound covers the preregistered total number of
         # candidate comparisons, including adaptive rounds with fresh cases.
         if statistics["method"] == "paired-hoeffding":
-            variance_bound = math.fsum((weights[task] / total_weight) ** 2 / spec["episodes"]
-                                       for task, spec in tasks.items())
+            counts = {task: sum(pair[0] == task for pair in expected) for task in tasks}
+            variance_bound = math.fsum((weights[task] / total_weight) ** 2 / counts[task]
+                                       for task in tasks if counts[task])
             # Form the ratio in log space: a valid small alpha can overflow the
             # quotient even though the confidence radius is finite.
             log_correction = math.log(statistics["max_comparisons"]) - math.log(statistics["alpha"])
             radius = math.sqrt(2 * log_correction * variance_bound)
 
-    n_total = cohort_cases if betting else len(expected)
+    available_is_prefix = expected == set(frozen_order[:len(expected)])
+    n_total = (cohort_cases if betting and available_is_prefix else len(expected))
     # For a case in task t, x_i = (w_t / W) * (n_total / n_t) * d_i.
     # Therefore mean(x) = sum_t (1/n_total) * (w_t/W) * (n_total/n_t)
     # * sum_i d_i = sum_t (w_t/W) * mean(d_t), exactly the normalized gain.
+    available_counts = {task: sum(pair[0] == task for pair in expected) for task in tasks}
     contribution_factor = {
-        task: (weights[task] / total_weight) * n_total / spec["episodes"]
-        for task, spec in tasks.items()
+        task: (weights[task] / total_weight) * n_total / available_counts[task]
+        for task in tasks if available_counts[task]
     }
     contributions = {
         name: [
             contribution_factor[pair[0]] * (paired_scores[name][pair] - paired_scores[parent][pair])
-            for pair in (frozen_order[:evaluated_cases] if betting else sorted(expected))
+            for pair in (evaluation_order[:evaluated_cases] if betting else sorted(expected))
         ]
         for name in metrics
         if name != parent
@@ -636,7 +671,7 @@ def select_survivor(
         statistical_p = None
         if statistics:
             differences = [paired_scores[name][pair] - paired_scores[parent][pair]
-                           for pair in (frozen_order[:evaluated_cases] if betting else sorted(expected))]
+                           for pair in (evaluation_order[:evaluated_cases] if betting else sorted(expected))]
             if statistics["method"] == "paired-hoeffding":
                 metric["improvement_evidence"] = dict(
                     method=statistics["method"], normalized_gain=gain, lower_bound=gain-radius,

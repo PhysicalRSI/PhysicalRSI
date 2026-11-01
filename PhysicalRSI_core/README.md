@@ -46,6 +46,22 @@ A task adapter should provide:
 - a proposer that returns a bounded candidate mutation;
 - an evaluator that records trajectories and paired comparisons.
 
+## Trial runtime
+
+The runtime records policy verdicts as `success` or `failure`. A policy that
+uses its declared wall budget is recorded as `deadline`, which is a policy
+failure for scoring. A trial that could not be run faithfully is recorded as
+`infrastructure-fault`: examples include an evidence/filesystem error, a lost
+robot link, or a sensor timeout. Host stalls are separated from policy time by
+the runtime timing record. Infrastructure faults close their journals and
+fault evidence before the evaluator retries the same case and pairing slot
+(two retries by default). Exhausted retries make the paired case unavailable
+for both arms and reduce the cohort's paired sample size; they never become a
+policy failure or abort the campaign. Adapters may raise the public
+`InfrastructureFault` contract to declare a lost device or timeout explicitly.
+
+`Cancelled` remains cooperative user cancellation and still stops the campaign.
+
 The lowercase `physicalrsi` package exposes the stable skill, composition,
 registry, environment, reporting and CLI interfaces. The Core package supplies
 the durable Self-Harness implementation behind those interfaces.

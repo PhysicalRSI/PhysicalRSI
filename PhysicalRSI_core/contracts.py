@@ -106,6 +106,15 @@ class Cancelled(RuntimeError):
     """Cooperative cancellation, including deadline expiry."""
 
 
+class InfrastructureFault(RuntimeError):
+    """The trial could not be executed faithfully because infrastructure failed.
+
+    Ports may raise this exception for a lost device, sensor timeout, or another
+    explicitly detected execution fault.  The evaluator may retry the same
+    deterministic case after the runtime closes the faulted attempt.
+    """
+
+
 class ReconciliationRequired(RuntimeError):
     """An uncertain external effect must be inspected before reuse or retry."""
 

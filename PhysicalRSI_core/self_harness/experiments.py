@@ -56,7 +56,7 @@ def _aggregate_repetitions(rows, tasks):
 
 def experiment_score(receipt, *, score_measurement, score_range):
     """Validate the same measured score before more trials and at selection."""
-    if receipt["outcome"] not in {"success", "failure"}:
+    if receipt["outcome"] not in {"success", "failure", "deadline"}:
         raise ValueError("Experiment has no definite task outcome; preserve it without scoring")
     score = (int(receipt["outcome"] == "success") if score_measurement is None else
              receipt["verdict"]["measurements"].get(score_measurement))
@@ -165,11 +165,23 @@ def experiment_result(runtime, run_ids, *, candidate_id, comparison, cohort,
         raise ValueError("Incomplete experiment cohort or mixed System 2 revisions")
     if repetitions > 1:
         rows = _aggregate_repetitions(rows, tasks)
+    # The protocol identity describes the frozen paired execution, rather than
+    # the subset that happened to remain available after infrastructure
+    # retries.  Use one template per task and bind it to the complete cohort so
+    # an arm with an unavailable case still compares against the same protocol
+    # as the arm that completed that case.
+    protocol_templates = {}
+    for protocol in protocols:
+        protocol_templates.setdefault(protocol["task"],
+                                      {key: value for key, value in protocol.items()
+                                       if key != "case_sha256"})
+    protocol_identity = digest(dict(
+        cases=sorted(full_expected),
+        protocols=sorted(protocol_templates.values(), key=lambda row: row["task"])))
     return dict(candidate_id=candidate_id,
                 kind=comparison.get("evaluation_kind", "policy_evaluation"),
                 native_exit_code=0, comparison_sha256=comparison_sha, cohort_sha256=cohort_sha,
                 freeze_sha256=comparison["candidates"][candidate_id],
                 evaluator_revision=evaluator_revision,
-                experiment_protocol_sha256=digest(sorted(
-                    protocols, key=lambda row: (row["task"], row["case_sha256"]))),
+                experiment_protocol_sha256=protocol_identity,
                 episodes=sorted(rows, key=lambda row: (row["task"], row["layout_sha256"])))

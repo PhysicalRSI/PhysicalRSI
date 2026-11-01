@@ -15,7 +15,7 @@ from pathlib import Path
 from time import monotonic
 from typing import Protocol
 
-from .contracts import Context, ReconciliationRequired
+from .contracts import Cancelled, Context, InfrastructureFault, ReconciliationRequired
 from .embodiment import Embodiment, ExecutionBinding, System1, System2Trial
 from .infra import blobs, devices, evidence, storage, trial_artifacts
 from .infra.storage import atomic_json, digest, file_digest, identifier, locked, read_json
@@ -154,6 +154,16 @@ def _verify_call(verifier, case, trace, context):
             return method(case, trace, context=context)
         return method(case, trace, context)
     return method(case, trace)
+
+
+def _infrastructure_error(error):
+    """Return whether an adapter/runtime error makes a trial unfaithful."""
+    # A missing content-addressed observation is a malformed adapter result,
+    # not a host fault.  Preserve the existing contract which surfaces it to
+    # the caller while treating transport/filesystem errors as infrastructure.
+    if isinstance(error, FileNotFoundError) and "Referenced blob is missing" in str(error):
+        return False
+    return isinstance(error, (InfrastructureFault, OSError))
 
 
 @dataclass(frozen=True)
@@ -363,6 +373,35 @@ class ExperimentRuntime:
                     or any(c not in "0123456789abcdef" for c in execution_id)):
                 raise ValueError("Invalid Trial execution identity")
         journals = _journal_report(folder)
+        # Infrastructure faults are complete attempts with a deliberately
+        # smaller evidence closure.  The fault record closes the attempt before
+        # an evaluator is allowed to create its deterministic retry.
+        if receipt.get("state") == "completed" and receipt.get("outcome") == "infrastructure-fault":
+            specification = evidence.EvidenceReader(folder).document(
+                "experiment.json", receipt.get("evidence", {}).get("experiment.json"))
+            if specification.get("schema") not in {"physicalrsi.experiment/v1", "physicalrsi.experiment/v2"}:
+                raise ValueError("Unsupported experiment schema")
+            if digest(specification) != receipt.get("experiment_sha256"):
+                raise ValueError("Experiment specification changed")
+            required = {"experiment.json", "fault.json"}
+            if set(receipt.get("evidence", {})) != required:
+                raise ValueError("Infrastructure fault evidence manifest is incomplete")
+            reader = evidence.EvidenceReader(folder)
+            # The receipt is the publication marker and is intentionally not
+            # listed in its own evidence manifest.  Read it before the final
+            # unchanged check so the reader has the comparison hash available.
+            reader.document("receipt.json")
+            fault = reader.document("fault.json", receipt["evidence"]["fault.json"])
+            if fault.get("outcome") != "infrastructure-fault" or not fault.get("reason"):
+                raise ValueError("Infrastructure fault record is incomplete")
+            reader.verify(receipt["evidence"])
+            if receipt.get("id") != run_id or receipt.get("scope") != specification.get("scope"):
+                raise ValueError("Infrastructure fault receipt identity differs from the experiment")
+            reader.unchanged_document("receipt.json")
+            return dict(receipt=receipt, specification=specification,
+                        documents={"fault.json": fault},
+                        evidence={str(reader.path(name)): sha for name, sha in reader.hashes.items()},
+                        journals=journals, fault=fault)
         if receipt["state"] != "completed":
             detail = ""
             action = _last_action_record(folder)
@@ -458,7 +497,9 @@ class ExperimentRuntime:
             raise ValueError("Receipt step count differs from the trajectory")
         if version == "v2":
             initial = reader.document("reset.json")
-            if initial["ready"] is False:
+            if receipt.get("outcome") == "deadline":
+                termination = "deadline"
+            elif initial["ready"] is False:
                 termination = "reset_not_ready"
             elif initial.get("terminated", False) or (len(trace) > 1 and trace[-1]["terminated"]):
                 termination = "environment"
@@ -582,6 +623,7 @@ class ExperimentRuntime:
         start = monotonic()
         phase, phase_start = "preparation", start
         phase_seconds = dict.fromkeys(("preparation", "reset", "rollout", "verification", "finalization", "cleanup"), 0.)
+        call_seconds = dict.fromkeys(("policy", "environment", "verifier"), 0.)
 
         def enter_phase(name):
             nonlocal phase, phase_start
@@ -592,8 +634,19 @@ class ExperimentRuntime:
         def record_timing():
             enter_phase(phase)
             receipt["timing"] = dict(schema="physicalrsi.trial-timing/v1",
-                                     phase_seconds=dict(phase_seconds))
+                                     phase_seconds=dict(phase_seconds),
+                                     call_seconds=dict(call_seconds),
+                                     non_call_seconds=max(0., (phase_start - start)
+                                                           - sum(call_seconds.values())))
             receipt["elapsed_seconds"] = phase_start - start
+
+        def invoke(kind, method, *args, **kwargs):
+            """Measure time spent in a port separately from host/runtime time."""
+            began = monotonic()
+            try:
+                return method(*args, **kwargs)
+            finally:
+                call_seconds[kind] += monotonic() - began
 
         blob_store = blobs.BlobStore(folder / "blobs", fsync=self.durability in {"step", "final"})
         blob_store.ensure_root()
@@ -624,7 +677,7 @@ class ExperimentRuntime:
                 return
             policy_stop_attempted = True
             try:
-                report = (_json(policy.end_episode(context)) if policy_started
+                report = (_json(invoke("policy", policy.end_episode, context)) if policy_started
                           else dict(stopped=True, started=False))
                 if report.get("stopped") is not True:
                     raise ReconciliationRequired("Policy worker termination is unconfirmed")
@@ -653,7 +706,7 @@ class ExperimentRuntime:
             enter_phase('reset')
             receipt['execution_phase'] = 'reset'
             atomic_json(folder / 'receipt.json', receipt)
-            initial = _json(environment.reset(deepcopy(case), context))
+            initial = _json(invoke("environment", environment.reset, deepcopy(case), context))
             if "observation" not in initial:
                 raise ValueError("Reset must return an observation")
             check_observation_blobs(initial["observation"])
@@ -677,8 +730,8 @@ class ExperimentRuntime:
                 if binding:
                     stable()
                     policy_started = True
-                    policy.begin_episode(specification["task"], deepcopy(case),
-                                         deepcopy(initial["observation"]), context)
+                    invoke("policy", policy.begin_episode, specification["task"], deepcopy(case),
+                           deepcopy(initial["observation"]), context)
                     # Retain initial policy evidence before the first
                     # environment action, including when that action is lost.
                     record_policy_evidence()
@@ -691,13 +744,15 @@ class ExperimentRuntime:
                     stable()
                     context.check()
                     policy_started = True
-                    action = _json(policy.act(deepcopy(trace[-1]["observation"]), context))
+                    action = _json(invoke("policy", policy.act,
+                                          deepcopy(trace[-1]["observation"]), context))
                     context.check()
                     stable()
                     # Persist the intended effect before entering the environment.
                     pending = dict(step=step, action=action, state="dispatched")
                     action_journal.append(pending, fsync=journal_fsync("actions", "dispatched"))
-                    result = _json(environment.step(deepcopy(action), context))
+                    result = _json(invoke("environment", environment.step,
+                                          deepcopy(action), context))
                     if (type(result.get("terminated")) is not bool or "observation" not in result
                             or {"step", "action"}.intersection(result)):
                         raise ValueError("Environment must return observation and termination without action metadata")
@@ -714,7 +769,8 @@ class ExperimentRuntime:
                 stop_policy()
                 stable()
                 enter_phase("verification")
-                verdict = _json(_verify_call(verifier, deepcopy(case), deepcopy(trace), context))
+                verdict = _json(invoke("verifier", _verify_call, verifier,
+                                       deepcopy(case), deepcopy(trace), context))
                 context.check()
                 if verdict.get("outcome") not in {"success", "failure", "uncertain"}:
                     raise ValueError("Verifier must return success, failure or uncertain")
@@ -724,7 +780,7 @@ class ExperimentRuntime:
             stop_policy()
             if claim:
                 context.check()
-                quiet = _json(environment.quiesce(context))
+                quiet = _json(invoke("environment", environment.quiesce, context))
                 atomic_json(folder / "quiescence.json", quiet)
                 if quiet.get("quiescent") is not True:
                     raise ReconciliationRequired("Environment did not confirm device quiescence")
@@ -741,6 +797,10 @@ class ExperimentRuntime:
             close_journals()
             atomic_json(folder / "trajectory.json", trace)
             atomic_json(folder / "verdict.json", verdict)
+            # Evidence publication can stall independently of the policy.  A
+            # final cooperative check turns that overrun into the same
+            # infrastructure-fault path as a mid-rollout host pause.
+            context.check()
             referenced, blob_paths = _blob_evidence(
                 folder, blob_store,
                 [initial, trace, verdict,
@@ -757,8 +817,66 @@ class ExperimentRuntime:
                            evidence={name: file_digest(folder / name) for name in sorted(evidence_names)})
             record_timing()
             atomic_json(folder / "receipt.json", receipt)
+            context.check()
             return self.read(run_id)
         except BaseException as error:
+            # A deadline raised after a host-side pause is an infrastructure
+            # fault.  A deadline reached while the policy itself consumed the
+            # budget remains a policy failure.  Explicit cancellation always
+            # follows the existing reconciliation path.
+            deadline_expired = (isinstance(error, Cancelled)
+                                and not context.cancelled.is_set()
+                                and context.deadline is not None
+                                and monotonic() >= context.deadline)
+            infrastructure = _infrastructure_error(error) or (
+                deadline_expired and call_seconds["policy"] < budget.seconds
+            )
+            if infrastructure or (deadline_expired and call_seconds["policy"] >= budget.seconds):
+                enter_phase("cleanup")
+                close_journals()
+                try:
+                    stop_policy()
+                except BaseException as cleanup_error:
+                    receipt["policy_cleanup_error"] = type(cleanup_error).__name__
+                record_timing()
+                if infrastructure:
+                    reason = ("Host stall exceeded the trial budget outside policy calls"
+                              if deadline_expired and not _infrastructure_error(error)
+                              else str(error) or type(error).__name__)
+                    fault = dict(schema="physicalrsi.infrastructure-fault/v1",
+                                 outcome="infrastructure-fault", reason=reason,
+                                 exception_type=type(error).__name__,
+                                 timing=receipt["timing"],
+                                 elapsed_seconds=receipt["elapsed_seconds"])
+                    atomic_json(folder / "fault.json", fault)
+                    receipt.update(state="completed", outcome="infrastructure-fault",
+                                   verdict=dict(outcome="infrastructure-fault", reason=reason,
+                                                measurements={}),
+                                   execution_phase="completed", steps=max(0, len(trace) - 1),
+                                   termination="infrastructure-fault",
+                                   evidence={name: file_digest(folder / name)
+                                             for name in sorted({"experiment.json", "fault.json"})})
+                    atomic_json(folder / "receipt.json", receipt)
+                    return self.read(run_id)
+                # The policy consumed its allowance.  Preserve a normal,
+                # scorable receipt so selection treats it as a failure.
+                verdict = dict(outcome="deadline", reason="Policy budget exceeded",
+                               measurements={})
+                atomic_json(folder / "trajectory.json", trace)
+                atomic_json(folder / "verdict.json", verdict)
+                evidence_names.update({"trajectory.json", "verdict.json"})
+                receipt.update(state="completed", outcome="deadline", verdict=verdict,
+                               execution_phase="completed", steps=max(0, len(trace) - 1),
+                               termination="deadline",
+                               evidence={name: file_digest(folder / name)
+                                         for name in sorted(evidence_names
+                                                            .intersection({"experiment.json", "reset.json",
+                                                                           "trajectory.json", "verdict.json",
+                                                                           "lease.json", "quiescence.json",
+                                                                           "policy.json"}))
+                                         if (folder / name).exists()})
+                atomic_json(folder / "receipt.json", receipt)
+                return self.read(run_id)
             enter_phase("cleanup")
             close_journals()
             try:
