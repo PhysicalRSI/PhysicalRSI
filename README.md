@@ -278,6 +278,14 @@ The task factory is referenced by a small package descriptor:
 The task adapter constructs the environment, policy, verifier, proposer, and
 Self-Harness evaluator. PhysicalRSI then owns the common research sequence:
 
+## Bring a Gymnasium environment
+
+Install the optional adapter with `pip install 'physicalrsi[gym]'`. The
+`GymnasiumEnvironment`, `GymnasiumVerifier`, and `CallablePolicy` ports wrap a
+Gymnasium environment while keeping observations, actions, contracts, and
+candidate `control.json` parameters in the core loop. Run the complete example
+with `python examples/gym_quickstart/run.py`.
+
 ```text
 parent
   → development rollout
