@@ -109,7 +109,7 @@ def audit_bundle(reader, run_id, specification, *, prefix=''):
             or previous['id'] != record['predecessor_id']
             or previous['experiment_sha256'] != digest(previous_spec)
             or base_specification(previous_spec) != base_specification(specification)
-            or {'source/reset.json', 'source/pending-action.json'}.intersection(files)):
+            or {'source/reset.json', 'source/pending-action.json', 'source/actions.jsonl'}.intersection(files)):
         raise ValueError('Only an interrupted attempt before reset readiness can be replaced')
     if digest(record['plan']) != record['plan_sha256']:
         raise ValueError('Replacement plan identity changed')
@@ -252,7 +252,7 @@ class TrialRecovery:
                 if (receipt['state'] not in {'started', 'needs_reconciliation'} or 'outcome' in receipt
                         or receipt.get('execution_phase') != 'reset'
                         or receipt['id'] != failed_id or receipt['experiment_sha256'] != digest(spec)
-                        or {'reset.json', 'pending-action.json'}.intersection(files)
+                        or {'reset.json', 'pending-action.json', 'actions.jsonl'}.intersection(files)
                         or ('trajectory.json' in files and read_json(source / 'trajectory.json'))):
                     raise ValueError('Only an interrupted attempt before reset readiness can be replaced')
                 _matches_plan(spec, original, self.plan)

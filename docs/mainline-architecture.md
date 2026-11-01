@@ -73,3 +73,13 @@ benchmark task name, simulator actor handle, evaluation seed or native score.
 The main branch therefore stays useful for a new simulator, a real robot, a
 different hand, or a purely software environment. Benchmark-specific results
 and integration code remain reviewable on their own branches.
+
+Trial recording uses an append-only trajectory and action journal while an
+episode is running, then publishes the canonical `trajectory.json` once during
+finalization. `ExperimentRuntime` defaults to `durability="intent"`, which
+fsyncs each action intent before it is sent and fsyncs final evidence;
+`durability="step"` also fsyncs every journal line for devices that require
+step-level persistence, while `durability="final"` leaves per-step journals
+unsynced for software simulators. Physical embodiments cannot select the
+`final` policy, and the selected policy is part of the frozen trial
+specification.

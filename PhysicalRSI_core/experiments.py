@@ -5,6 +5,7 @@ an adapter must honor Context.check() and bound its own device/network calls.
 Device ownership and trial receipts survive interruption without automatic retry.
 """
 import json
+import os
 import secrets
 from contextlib import nullcontext
 from copy import deepcopy
@@ -17,6 +18,91 @@ from .contracts import Context, ReconciliationRequired
 from .embodiment import Embodiment, ExecutionBinding, System1, System2Trial
 from .infra import devices, evidence, storage, trial_artifacts
 from .infra.storage import atomic_json, digest, file_digest, identifier, locked, read_json
+
+
+_DURABILITY_POLICIES = {"intent", "step", "final"}
+
+
+class _AppendJournal:
+    """A small append-only JSONL writer used only during one execution."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+
+    def append(self, value, *, fsync=False):
+        payload = storage.canonical(value) + b"\n"
+        written = os.write(self._fd, payload)
+        if written != len(payload):
+            raise OSError(f"Short JSONL journal write to {self.path}")
+        if fsync:
+            os.fsync(self._fd)
+
+    def close(self):
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
+
+
+def _read_jsonl(path):
+    """Read complete JSONL records and identify a torn trailing write.
+
+    A final line without its newline is a crash artifact. It is returned as a
+    report only; callers must never use it as evidence. Malformed complete
+    lines indicate changed or corrupt evidence and remain errors.
+    """
+    path = Path(path)
+    if not path.exists():
+        return [], False
+    lines = path.read_bytes().splitlines(keepends=True)
+    records = []
+    trailing_partial = False
+    for index, line in enumerate(lines):
+        complete = line.endswith(b"\n")
+        body = line[:-1] if complete else line
+        if not complete:
+            if index == len(lines) - 1:
+                trailing_partial = True
+                break
+            raise ValueError(f"Malformed JSONL journal line in {path}")
+        if not body.strip():
+            continue
+        try:
+            records.append(json.loads(body))
+        except json.JSONDecodeError as error:
+            if index == len(lines) - 1:
+                trailing_partial = True
+                break
+            raise ValueError(f"Malformed JSONL journal line in {path}") from error
+    return records, trailing_partial
+
+
+def _journal_report(folder):
+    report = {}
+    for name in ("trajectory.jsonl", "actions.jsonl"):
+        path = Path(folder) / name
+        if not path.exists():
+            continue
+        try:
+            records, trailing_partial = _read_jsonl(path)
+            report[name] = {"records": len(records), "trailing_partial": trailing_partial}
+        except ValueError as error:
+            report[name] = {"records": 0, "trailing_partial": False, "error": str(error)}
+    return report
+
+
+def _last_action_record(folder):
+    """Return the last complete action record, retaining the legacy fallback."""
+    actions = Path(folder) / "actions.jsonl"
+    if actions.exists():
+        records, _ = _read_jsonl(actions)
+        if records:
+            return records[-1]
+    pending = Path(folder) / "pending-action.json"
+    if pending.exists():
+        return read_json(pending)
+    return None
 
 
 def _json(value):
@@ -124,6 +210,28 @@ def trial_adapters(suite, candidate, task):
     return TrialAdapters(environment, suite.policy(deepcopy(candidate), task), suite.verifier(task))
 
 
+_SOURCE_DIGESTS = {}
+
+
+def _source_digest(path):
+    """Digest of an owned source file, re-read whenever its metadata changes.
+
+    The runtime checks its own implementation on every control step. Reading
+    every source file each step made trials I/O-bound on network storage, so
+    bytes are re-hashed only when (device, inode, size, mtime_ns, ctime_ns)
+    changes; otherwise the cached digest of the identical file is reused.
+    """
+    path = Path(path)
+    st = path.stat()
+    key = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+    cached = _SOURCE_DIGESTS.get(path)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    value = file_digest(path)
+    _SOURCE_DIGESTS[path] = (key, value)
+    return value
+
+
 def runtime_implementation():
     """Owned execution dependencies, shared by Trial and evaluator identities.
 
@@ -132,7 +240,7 @@ def runtime_implementation():
     frozen evaluator and Trial. External libraries remain provider-owned.
     """
     root = Path(__file__).parent
-    return {name: file_digest(root / path) for name, path in {
+    return {name: _source_digest(root / path) for name, path in {
         "runtime": "experiments.py", "contracts": "contracts.py", "trials": "trials.py",
         "trial_artifacts": "infra/trial_artifacts.py", "evidence": "infra/evidence.py",
         "embodiment": "embodiment.py", "timing": "timing.py",
@@ -162,9 +270,12 @@ class ExperimentRuntime:
     executing revision. Completed runs read verified evidence without device
     calls. Uncertain runs require reconciliation, even after device recovery.
     """
-    def __init__(self, root, *, device_registry=None):
+    def __init__(self, root, *, device_registry=None, durability="intent"):
+        if durability not in _DURABILITY_POLICIES:
+            raise ValueError("durability must be intent, step or final")
         self.root = Path(root).resolve()
         self.device_registry = device_registry
+        self.durability = durability
 
     def require_unstarted(self, run_id, *, replacement=None):
         """A missing receipt is not proof that an earlier execution never began."""
@@ -204,11 +315,25 @@ class ExperimentRuntime:
             if (not isinstance(execution_id, str) or len(execution_id) != 32
                     or any(c not in "0123456789abcdef" for c in execution_id)):
                 raise ValueError("Invalid Trial execution identity")
+        journals = _journal_report(folder)
         if receipt["state"] != "completed":
-            raise ReconciliationRequired(f"Inspect interrupted experiment: {folder}")
+            detail = ""
+            action = _last_action_record(folder)
+            if action is not None and action.get("state") == "dispatched":
+                detail = "; last action intent is durable and its effect requires reconciliation"
+            if any(value.get("trailing_partial") for value in journals.values()):
+                detail += "; trailing partial journal record was ignored"
+            raise ReconciliationRequired(f"Inspect interrupted experiment: {folder}{detail}")
         specification = reader.document("experiment.json", receipt["evidence"].get("experiment.json"))
         if specification["schema"] not in {"physicalrsi.experiment/v1", "physicalrsi.experiment/v2"}:
             raise ValueError("Unsupported experiment schema")
+        durability = specification.get("durability", "intent")
+        if durability not in _DURABILITY_POLICIES:
+            raise ValueError("Unknown durability policy")
+        if (specification.get("binding")
+                and specification["binding"]["embodiment"]["mode"] == "physical"
+                and durability == "final"):
+            raise ValueError("Physical embodiments require intent or step durability")
         version = specification["schema"].rsplit("/", 1)[1]
         if receipt.get("schema") != "physicalrsi.experiment-receipt/" + version:
             raise ValueError("Receipt schema differs from the experiment")
@@ -255,6 +380,8 @@ class ExperimentRuntime:
             receipt.get(key) != specification.get(key) for key in ("binding", "system2")
         ):
             raise ValueError("Receipt execution binding changed")
+        if "durability" in receipt and receipt["durability"] != durability:
+            raise ValueError("Receipt durability differs from the experiment")
         verdict = reader.document("verdict.json")
         if receipt["verdict"] != verdict or receipt["outcome"] != verdict["outcome"]:
             raise ValueError("Receipt disagrees with the recorded verdict")
@@ -285,6 +412,8 @@ class ExperimentRuntime:
         result = dict(receipt=receipt, specification=specification,
                     documents={name:reader.document(name) for name in ("reset.json", "trajectory.json", "verdict.json")},
                     evidence={str(reader.path(name)):sha for name,sha in reader.hashes.items()})
+        if journals:
+            result["journals"] = journals
         if recovery is not None:
             result['recovery'] = recovery
         return result
@@ -296,6 +425,8 @@ class ExperimentRuntime:
         if not scope or not task:
             raise ValueError("Declare the task and evidence scope")
         binding = _binding(environment, policy)
+        if binding and binding.embodiment.mode == "physical" and self.durability == "final":
+            raise ValueError("Physical embodiments require intent or step durability")
         finish_policy = getattr(policy, "end_episode", None)
         if finish_policy is not None and not callable(finish_policy):
             raise ValueError("Optional policy end_episode must be callable")
@@ -324,6 +455,7 @@ class ExperimentRuntime:
             policy_lifecycle="episode" if finish_policy is not None else None,
             artifact_contract="files/v1" if export_evidence is not None else None,
             system2=asdict(system2) if system2 else None,
+            durability=self.durability,
             device_registry=self.device_registry.identity() if resources else None))
         if policy_evidence is not None:
             specification["policy_evidence_contract"] = "json/v1"
@@ -375,7 +507,8 @@ class ExperimentRuntime:
                        execution_id=secrets.token_hex(16),
                        state="started", experiment_sha256=frozen, scope=specification["scope"],
                        qualification=None, binding=specification["binding"],
-                       system2=specification["system2"], execution_phase='admitted')
+                       system2=specification["system2"], durability=specification["durability"],
+                       execution_phase='admitted')
         atomic_json(folder / "receipt.json", receipt)
         start = monotonic()
         phase, phase_start = "preparation", start
@@ -397,9 +530,21 @@ class ExperimentRuntime:
                           harness_revision=binding.system1.revision if binding else "")
         case = specification["case"]
         trace = []
+        journals = []
+        trajectory_journal = action_journal = None
         policy_started, policy_stop_attempted = False, False
         if specification["policy_lifecycle"]:
             evidence_names.add("policy.json")
+
+        def close_journals():
+            for journal in journals:
+                journal.close()
+
+        def journal_fsync(kind, state=None):
+            if specification["durability"] == "step":
+                return True
+            return (specification["durability"] == "intent"
+                    and kind == "actions" and state == "dispatched")
 
         def stop_policy():
             nonlocal policy_stop_attempted
@@ -443,7 +588,9 @@ class ExperimentRuntime:
                 verdict = dict(outcome="invalid", reason=termination, measurements={})
             else:
                 trace.append(dict(observation=initial["observation"]))
-                atomic_json(folder / "trajectory.json", trace)
+                trajectory_journal = _AppendJournal(folder / "trajectory.jsonl")
+                journals.append(trajectory_journal)
+                trajectory_journal.append(trace[-1], fsync=journal_fsync("trajectory"))
                 if type(initial.get("terminated", False)) is not bool:
                     raise ValueError("Reset termination must be a boolean")
                 if binding:
@@ -456,6 +603,9 @@ class ExperimentRuntime:
                     record_policy_evidence()
                     context.check()
                 termination = "environment" if initial.get("terminated", False) else "step_budget"
+                if termination != "environment":
+                    action_journal = _AppendJournal(folder / "actions.jsonl")
+                    journals.append(action_journal)
                 for step in range(0 if termination == "environment" else budget.max_steps):
                     stable()
                     context.check()
@@ -465,15 +615,16 @@ class ExperimentRuntime:
                     stable()
                     # Persist the intended effect before entering the environment.
                     pending = dict(step=step, action=action, state="dispatched")
-                    atomic_json(folder / "pending-action.json", pending)
+                    action_journal.append(pending, fsync=journal_fsync("actions", "dispatched"))
                     result = _json(environment.step(deepcopy(action), context))
                     if (type(result.get("terminated")) is not bool or "observation" not in result
                             or {"step", "action"}.intersection(result)):
                         raise ValueError("Environment must return observation and termination without action metadata")
                     trace.append(dict(result, step=step, action=action))
                     # Retain returned observations even if the call exceeded its deadline.
-                    atomic_json(folder / "trajectory.json", trace)
-                    atomic_json(folder / "pending-action.json", dict(pending, state="observed"))
+                    trajectory_journal.append(trace[-1], fsync=journal_fsync("trajectory"))
+                    action_journal.append(dict(pending, state="observed"),
+                                           fsync=journal_fsync("actions", "observed"))
                     context.check()
                     if result["terminated"]:
                         termination = "environment"
@@ -505,6 +656,7 @@ class ExperimentRuntime:
                 record_policy_evidence()
                 context.check()
                 stable()
+            close_journals()
             atomic_json(folder / "trajectory.json", trace)
             atomic_json(folder / "verdict.json", verdict)
             receipt.update(state="completed", outcome=verdict["outcome"], verdict=verdict,
@@ -517,6 +669,7 @@ class ExperimentRuntime:
             return self.read(run_id)
         except BaseException as error:
             enter_phase("cleanup")
+            close_journals()
             try:
                 stop_policy()
             except BaseException as cleanup_error:
